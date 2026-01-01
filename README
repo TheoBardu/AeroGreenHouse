@@ -1,1 +1,5 @@
-Ciao
+####################
+AeroGreenHouse Code
+####################
+
+This code allows you to manage the GPIO pins of the raspberry pi microcomputer for the management of an aeroponic cultivation system.
