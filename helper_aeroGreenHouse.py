@@ -10,9 +10,9 @@ class aeroHelper():
         
         :param self: Descrizione
         '''
-
         self.config_file_name = 'config.yaml'
         self.configs = self.load_config(self.config_file_name)
+        print(self.configs)
 
     
 
@@ -68,3 +68,46 @@ class aeroHelper():
 
         # Se non trovata
         raise ValueError("Nessun gpio pin chiamato 'AEROPONICS' trovato nella configurazione")
+
+
+    def initilize_gpio_output(self, gpio_list):
+        '''
+        Inizializzo tutti i GPIO pin
+        '''
+        import RPi.GPIO as GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+
+        for g in gpio_list:
+            GPIO.setup(g, GPIO.OUT) 
+            GPIO.output(g,True) #spengo tutti i pin
+        
+        GPIO.cleanup()
+        
+
+
+
+
+    def activate_deactivate_pump(self,gpio,irrigation_time):
+        '''
+        Function for activating and deactivating the gpio for watering
+        
+        :param self: Description
+        :param gpio: GPIO number
+        :param irrigation_time: (s), time that the pump is activated
+        '''
+        import RPi.GPIO as GPIO
+        from time import sleep
+    
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        GPIO.setup(gpio, GPIO.OUT) 
+
+        
+
+
+
+
+
+
+
