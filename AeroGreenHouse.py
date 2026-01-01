@@ -11,12 +11,12 @@ import os
 # VARIABILI GLOBALI
 # ==========================
 
-running = True
-config_lock = threading.Lock()
+running = True # variabile che continua a far eseguire i thread
+config_lock = threading.Lock() 
 gpio_configs = {}   # name -> config dict
-threads = []
+threads = [] 
 last_mtime = 0
-CONFIG_FILE = "config.yaml"
+CONFIG_FILE = "config.yaml" #nome del file di configurazione .yaml
 
 # ==========================
 # CARICAMENTO CONFIG
@@ -60,7 +60,7 @@ for g in config["gpio_pins"]:
     logger.info(f"GPIO {g['pin']} ({g['name']}) inizializzato")
 
 # ==========================
-# THREAD GPIO
+# THREAD GPIOs
 # ==========================
 
 def gpio_cycle(name):
@@ -137,7 +137,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 # ==========================
-# AVVIO THREAD GPIO
+# AVVIO THREAD GPIOs
 # ==========================
 
 for name in gpio_configs.keys():

@@ -1,3 +1,6 @@
+T_var:
+  Topt: 18
+
 log:
   directory: "./logs"
   filename: "gpio_controller.log"
