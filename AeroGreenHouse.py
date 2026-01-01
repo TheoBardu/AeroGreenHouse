@@ -36,6 +36,7 @@ import logging
 import signal
 import sys
 import os
+import schedule
 
 # ==========================
 # VARIABILI GLOBALI
@@ -97,22 +98,18 @@ def gpio_cycle(name):
     logger.info(f"Thread avviato per {name}")
     from helper_aeroGreenHouse import aeroHelper
     ah = aeroHelper()
+    scheduler = schedule.Scheduler()
 
-    while running:
+    def cycle_job():
+        nonlocal scheduler
+        if not running:
+            return schedule.CancelJob
+        
         with config_lock:
             cfg = gpio_configs[name]
             pin = cfg["pin"]
-            interval = cfg["interval"]
             on_time = cfg["on_time"]
             dht22_gpio = gpio_configs["dht22"]["pin"]
-
-        # Usa un ciclo con sleep breve per verificare rapidamente running=False
-        end_time = time.time() + interval
-        while time.time() < end_time and running:
-            time.sleep(min(0.1, interval))
-
-        if not running:
-            break
         
         time_modifier = ah.T_modifier(ah.measure_dht22(dht22_gpio))
 
@@ -126,6 +123,20 @@ def gpio_cycle(name):
             time.sleep(on_time)
         GPIO.output(pin, True) # Spengo il pin
         logger.info(f"{name} OFF")
+        
+        # Reschedule il job con l'intervallo aggiornato
+        with config_lock:
+            interval = gpio_configs[name]["interval"]
+        scheduler.every(interval).seconds.do(cycle_job)
+    
+    with config_lock:
+        interval = gpio_configs[name]["interval"]
+    
+    scheduler.every(interval).seconds.do(cycle_job)
+
+    while running:
+        scheduler.run_pending()
+        time.sleep(0.1)
 
     GPIO.output(pin, True)
     logger.info(f"Thread terminato per {name}")
@@ -136,8 +147,13 @@ def gpio_cycle(name):
 
 def config_watcher():
     global last_mtime
+    scheduler = schedule.Scheduler()
 
-    while running: 
+    def check_config():
+        global last_mtime
+        if not running:
+            return schedule.CancelJob
+            
         try:
             mtime = os.path.getmtime(CONFIG_FILE)
 
@@ -161,9 +177,12 @@ def config_watcher():
 
         except Exception as e:
             logger.error(f"Errore reload config: {e}")
-
-        # Usa sleep breve per verificare rapidamente running=False
-        time.sleep(5)
+    
+    scheduler.every(5).seconds.do(check_config)
+    
+    while running:
+        scheduler.run_pending()
+        time.sleep(0.1)
 
 # ==========================
 # SIGNAL HANDLER
@@ -212,7 +231,7 @@ logger.info("Sistema GPIO avviato con reload dinamico")
 
 try:
     while True:
-        time.sleep(1)
+        time.sleep(0.1)
 except KeyboardInterrupt:
     pass
 finally:
