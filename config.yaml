@@ -6,7 +6,7 @@ log:
   filename: "gpio_controller.log"
   level: "INFO"
 
-config_reload_interval: 5   # secondi
+config_reload_interval: 4   # secondi
 
 gpio_pins:
   - name: "AEROPONICS"

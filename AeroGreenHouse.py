@@ -1,3 +1,33 @@
+# AeroGreenHouse GPIO Controller with Dynamic Configuration Reload
+# This module manages GPIO pin control on a Raspberry Pi with dynamic configuration reloading.
+# It provides:
+# - Automated GPIO pin cycling (on/off) based on configurable intervals
+# - Real-time configuration file monitoring and reloading without restart
+# - Thread-safe configuration updates
+# - Comprehensive logging to both file and console
+# - Graceful shutdown handling
+# Key Features:
+#     - Multiple GPIO pins controlled by separate worker threads
+#     - Each pin cycles with configurable interval and on-time duration
+#     - Configuration changes detected automatically from YAML file
+#     - Thread-safe access to shared configuration using locks
+#     - Proper cleanup and signal handling for safe shutdown
+# Global Variables:
+#     running (bool): Flag to control thread execution
+#     config_lock (Lock): Thread synchronization for config updates
+#     gpio_configs (dict): Maps GPIO names to their configuration
+#     threads (list): Active worker threads
+#     last_mtime (int): Last modification time of config file
+# Main Threads:
+#     - gpio_cycle(): Controls individual GPIO pins with on/off cycles
+#     - config_watcher(): Monitors and reloads configuration file changes
+# Configuration:
+#     Loads settings from config.yaml including:
+#     - GPIO pin numbers and names
+#     - Cycle intervals and on-time durations
+#     - Logging level and output directory
+
+
 import RPi.GPIO as GPIO
 import threading
 import time
@@ -55,7 +85,7 @@ GPIO.setwarnings(False)
 
 for g in config["gpio_pins"]:
     GPIO.setup(g["pin"], GPIO.OUT)
-    GPIO.output(g["pin"], GPIO.LOW)
+    GPIO.output(g["pin"], True) #Spengo tutti i pin inizialmente
     gpio_configs[g["name"]] = g.copy()
     logger.info(f"GPIO {g['pin']} ({g['name']}) inizializzato")
 
@@ -73,18 +103,21 @@ def gpio_cycle(name):
             interval = cfg["interval"]
             on_time = cfg["on_time"]
 
-        time.sleep(interval)
+        # Usa un ciclo con sleep breve per verificare rapidamente running=False
+        end_time = time.time() + interval
+        while time.time() < end_time and running:
+            time.sleep(min(0.1, interval))
 
         if not running:
             break
 
         logger.info(f"{name} ON")
-        GPIO.output(pin, GPIO.HIGH)
+        GPIO.output(pin, False) #Accendo il pin
         time.sleep(on_time)
-        GPIO.output(pin, GPIO.LOW)
+        GPIO.output(pin, True) # Spengo il pin
         logger.info(f"{name} OFF")
 
-    GPIO.output(pin, GPIO.LOW)
+    GPIO.output(pin, True)
     logger.info(f"Thread terminato per {name}")
 
 # ==========================
@@ -119,7 +152,8 @@ def config_watcher():
         except Exception as e:
             logger.error(f"Errore reload config: {e}")
 
-        time.sleep(config.get("config_reload_interval", 5))
+        # Usa sleep breve per verificare rapidamente running=False
+        time.sleep(5)
 
 # ==========================
 # SIGNAL HANDLER
@@ -144,7 +178,7 @@ for name in gpio_configs.keys():
     t = threading.Thread(
         target=gpio_cycle,
         args=(name,),
-        daemon=True
+        daemon=False
     )
     threads.append(t)
     t.start()
@@ -155,15 +189,25 @@ for name in gpio_configs.keys():
 
 watcher = threading.Thread(
     target=config_watcher,
-    daemon=True
+    daemon=False
 )
 watcher.start()
+threads.append(watcher)
 
 logger.info("Sistema GPIO avviato con reload dinamico")
 
 # ==========================
-# MAIN LOOP
+# MAIN LOOP - ATTESA THREAD
 # ==========================
 
-while True:
-    time.sleep(1)
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    pass
+finally:
+    # Aspetta che tutti i thread finiscano (max 5 secondi)
+    logger.info("Attesa terminazione thread...")
+    for t in threads:
+        t.join(timeout=5)
+    logger.info("Programma terminato")
