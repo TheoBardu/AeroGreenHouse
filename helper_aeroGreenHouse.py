@@ -21,7 +21,9 @@ class aeroHelper():
         with open(file_name, "r") as f:
             return yaml.safe_load(f)
 
-
+    ###########################################
+    # Irrigation time modifier for Aerophonics
+    ###########################################
 
     def T_modifier(self,T):
         '''
@@ -38,37 +40,10 @@ class aeroHelper():
         f = amp/(exp(a* (T - Topt)) + 1 ) - amp/2
         return f
     
-    def new_interval(self, T):
-        '''
-        Modifica la voce "interval" di AEROPONICS nel file di configurazione
 
-        :param T: Temperatura rilevata
-        :return: nuovo valore di interval (int)
-        '''
-        import yaml
-
-        # Cerca la voce AEROPONICS tra i gpio_pins
-        for pin in self.configs.get('gpio_pins', []):
-            if pin.get('name') == 'AEROPONICS':
-                sep_old = pin.get('interval')
-                if sep_old is None:
-                    raise KeyError("La voce 'AEROPONICS' non ha 'interval'")
-
-                # Calcola il nuovo interval e assicurati sia almeno 1
-                new_interval = sep_old - self.T_modifier(T) * sep_old
-
-                # Aggiorna la configurazione in memoria
-                pin['interval'] = new_interval
-
-                # Salva la configurazione sul file
-                with open(self.config_file_name, 'w') as f:
-                    yaml.safe_dump(self.configs, f, sort_keys=False)
-
-                return new_interval
-
-        # Se non trovata
-        raise ValueError("Nessun gpio pin chiamato 'AEROPONICS' trovato nella configurazione")
-
+    ###########################################
+    # GPIO pins activation and deactivation
+    ###########################################
 
     def initilize_gpio_output(self, gpio_list):
         '''
@@ -86,8 +61,6 @@ class aeroHelper():
         
 
 
-
-
     def activate_deactivate_pump(self,gpio,irrigation_time):
         '''
         Function for activating and deactivating the gpio for watering
@@ -103,7 +76,49 @@ class aeroHelper():
         GPIO.setwarnings(False)
         GPIO.setup(gpio, GPIO.OUT) 
 
+    ###########################################
+    # DHT22 sensor measurements
+    ###########################################        
+    def measure_dht22(self,gpio):
+        '''
+        Module that use the DHT22 sensor for reading the temperature and humidity  
         
+        :param self: Description
+        :param gpio: GPIO number (27,17, ecc)
+        '''
+        import adafruit_dht
+        import board
+        from time import sleep
+
+        dht = eval(f"adafruit_dht.DHT22(board.D{gpio})")
+
+        while True:
+            try:
+                T = dht.temperature
+                H = dht.humidity
+                #print('T = %4.2f °C ;  H = %4.2f'%(T, H),'%', 'VPD = %5.4f kPa'%(self.VPD(T,H))) #For debug
+                return T,H
+                break
+            except RuntimeError as error:
+                print(error.args[0])
+                sleep(2.0)
+                continue
+            except Exception as error:
+                dht.exit()
+                raise error
+        
+
+    
+    def VPD(self,T,H):
+        '''
+        Function that calculate the VPD
+        '''
+        from math import exp
+        es = lambda T : 0.6108 * exp(17.27*T/ (T + 273.3 ) )
+        ea = lambda H : H * es(T) / 100
+
+        VPD = es(T) - ea(H)
+        return VPD
 
 
 

@@ -1,9 +1,21 @@
 import yaml
 import os
+from helper_aeroGreenHouse import aeroHelper
+from numpy import arange
 
-with open('config.yaml', "r") as f:
-    config = yaml.safe_load(f)
+ah = aeroHelper()
+print(ah.configs['gpio_pins'])
+# tsep = 40
 
-print(config['gpio_pins'][0]['name'])
+# T = arange(-5,18)
+# for i,t in enumerate(T):
+#     f = ah.T_modifier(t)
+#     print(T[i], tsep - f*tsep)
 
-print(config.get("config_reload_interval", 5))
+
+# with open('config.yaml', "r") as f:
+#     config = yaml.safe_load(f)
+
+# print(config)
+# print(config['gpio_pins'][0]['name'])
+# print(config.get("config_reload_interval", 5))

@@ -45,8 +45,8 @@ running = True # variabile che continua a far eseguire i thread
 config_lock = threading.Lock() 
 gpio_configs = {}   # name -> config dict
 threads = [] 
-last_mtime = 0
 CONFIG_FILE = "config.yaml" #nome del file di configurazione .yaml
+last_mtime = os.path.getmtime(CONFIG_FILE)
 
 # ==========================
 # CARICAMENTO CONFIG
@@ -95,6 +95,8 @@ for g in config["gpio_pins"]:
 
 def gpio_cycle(name):
     logger.info(f"Thread avviato per {name}")
+    from helper_aeroGreenHouse import aeroHelper
+    ah = aeroHelper()
 
     while running:
         with config_lock:
@@ -102,6 +104,7 @@ def gpio_cycle(name):
             pin = cfg["pin"]
             interval = cfg["interval"]
             on_time = cfg["on_time"]
+            dht22_gpio = gpio_configs["dht22"]["pin"]
 
         # Usa un ciclo con sleep breve per verificare rapidamente running=False
         end_time = time.time() + interval
@@ -110,10 +113,17 @@ def gpio_cycle(name):
 
         if not running:
             break
+        
+        time_modifier = ah.T_modifier(ah.measure_dht22(dht22_gpio))
 
         logger.info(f"{name} ON")
         GPIO.output(pin, False) #Accendo il pin
-        time.sleep(on_time)
+        if name == "AEROPONICS":
+            on_time_mod = on_time - time_modifier * on_time
+            time.sleep(on_time_mod) #irrigation time modified by temperature
+            logger.info(f'Modified the irrigation time based on temperature for AEROPONICS: Target [{on_time} s] -> [{on_time_mod} s]')
+        else:
+            time.sleep(on_time)
         GPIO.output(pin, True) # Spengo il pin
         logger.info(f"{name} OFF")
 
@@ -127,7 +137,7 @@ def gpio_cycle(name):
 def config_watcher():
     global last_mtime
 
-    while running:
+    while running: 
         try:
             mtime = os.path.getmtime(CONFIG_FILE)
 
