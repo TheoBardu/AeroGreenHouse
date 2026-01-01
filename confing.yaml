@@ -1,7 +1,9 @@
 log:
   directory: "./logs"
-  filename: "gpio_greenHouse.log"
+  filename: "gpio_controller.log"
   level: "INFO"
+
+config_reload_interval: 5   # secondi
 
 gpio_pins:
   - name: "AEROPONICS"
@@ -13,8 +15,3 @@ gpio_pins:
     pin: 27
     interval: 120
     on_time: 20
-
-  - name: "VENTILATION"
-    pin: 22
-    interval: 30
-    on_time: 5
