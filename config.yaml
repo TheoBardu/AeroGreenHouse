@@ -14,12 +14,13 @@ config_reload_interval: 4   # secondi
 gpio_pins:
   - name: "AEROPONICS"
     pin: 17
-    interval: 5
+    interval: 3
     on_time: 10
 
   - name: "IDROPONICS"
-    pin: 27
-    interval: 120
+    pin_pump: 27
+    pin_sensor: 15
+    interval: 2
     on_time: 20
 
 

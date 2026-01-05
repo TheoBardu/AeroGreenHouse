@@ -1,42 +1,33 @@
 from helper_aeroGreenHouse import aeroHelper
-import yaml
 import schedule
 from time import sleep
 import threading
 import datetime
 
-
-
 ah = aeroHelper()
-CONFIG_FILE = "config.yaml" #nome del file di configurazione .yaml
 
-
-def load_config():
-    with open(CONFIG_FILE, "r") as f:
-        return yaml.safe_load(f)
-
-
-def job1():
-    config = load_config()
-    print(datetime.datetime.now(),config['T_var'])
-
-def job2():
-    config = load_config()
-    print(datetime.datetime.now(), config['dht22'])
-
-
-def run_thread(job):
-    job_thread = threading.Thread(target = job)
+def runner(job,*args, **kwargs):
+    '''
+    Function that runs in multi-thread the AeroSystems jobs
+    
+    :param job: Name of the function to run
+    :param args: Arguments of the function <job>
+    :param kwargs: Keyworkds arguments of the function <job>
+    '''
+    job_thread = threading.Thread(target=job, args=args, kwargs=kwargs)
     job_thread.start()
 
 
+#Setting up aerophonics
+schedule.every(ah.configs['gpio_pins'][0]['interval']).minutes.do(runner, ah.pump_aerophonics, gpio=ah.configs['gpio_pins'][0]['pin'] , irrigation_time=ah.configs['gpio_pins'][0]['on_time'])
 
-schedule.every(2).seconds.do(run_thread,job1)
-schedule.every(3).seconds.do(run_thread,job2)
+#Setting up Idrophonics
+schedule.every(ah.configs['gpio_pins'][1]['interval']).minutes.do(runner, ah.pump_idrophonics, gpio_pump = ah.configs['gpio_pins'][1]['pin_pump'], gpio_sensor = ah.configs['gpio_pins'][1]['pin_sensor'], max_irrigation_time = ah.configs['gpio_pins'][1]['on_time'] )
 
-print(datetime.datetime.now())
+
 while True:
     schedule.run_pending()
     sleep(1)
+
 
 

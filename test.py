@@ -23,8 +23,8 @@ def job1(what):
 
 
 
-def run_thread(job,what):
-    job_thread = threading.Thread(target = job(what))
+def run_thread(job, *args, **kwargs):
+    job_thread = threading.Thread(target=job, args=args, kwargs=kwargs)
     job_thread.start()
 
 
