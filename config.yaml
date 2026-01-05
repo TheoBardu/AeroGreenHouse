@@ -6,7 +6,7 @@ dht22:
 
 log:
   directory: "/Users/theo/Desktop/test/"
-  filename: "gpio_controller.log"
+  filename: "FnP_AeroGreenHouse.log"
   level: "INFO"
 
 config_reload_interval: 4   # secondi
