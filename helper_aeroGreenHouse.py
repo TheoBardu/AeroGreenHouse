@@ -55,18 +55,25 @@ class aeroHelper():
         :param config: configure file (config.yaml) with the pin listed
         '''
         import RPi.GPIO as GPIO
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
+        self.gpios = GPIO
+        self.gpios.setmode(GPIO.BCM)
+        self.gpios.setwarnings(False)
         g_list = []
         for g in config["gpio_pins"]:
-            GPIO.setup(g["pin"], GPIO.OUT)
-            GPIO.output(g["pin"], True) #Spengo tutti i pin inizialmente
+            if g["what_type"] == "sensor":
+                self.gpios.setup(g["pin"], self.gpios.IN)
+                g_list.append(g["pin"])
+                        
+            self.gpios.setup(g["pin"], self.gpios.OUT)
+            self.gpios.output(g["pin"], True) #Spengo tutti i pin inizialmente
             g_list.append(g["pin"])
             
         
-        self.logger.info('Initialized GPIOs:' + g_list)
-        GPIO.cleanup()
+        self.logger.info('Initialized GPIOs')
+        #self.gpios.cleanup()
 
+    def cleanup_gpios(self):
+        self.gpios.cleanup()
 
 
     def pump_aerophonics(self,gpio,irrigation_time):
@@ -76,26 +83,27 @@ class aeroHelper():
         :param gpio: GPIO number
         :param irrigation_time: (s), time that the pump is activated
         '''
-        import RPi.GPIO as GPIO
+        
         from time import sleep
-
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        GPIO.setup(gpio, GPIO.OUT)
-        GPIO.output(gpio, False) #turning on pump
+        
+        # import RPi.GPIO as GPIO
+        # GPIO.setmode(GPIO.BCM)
+        # GPIO.setwarnings(False)
+        # GPIO.setup(gpio, GPIO.OUT)
+        self.gpios.output(gpio, False) #turning on pump
         
         self.logger.info('AEROPONICS: Turning on the pump')
         
         for i in range(irrigation_time):
             if i==irrigation_time-1:
         
-                GPIO.output(gpio,True) #turning off the pump
+                self.gpios.output(gpio,True) #turning off the pump
         
                 self.logger.info('AEROPONICS: Turning off the pump')
                 break
             sleep(1)
         
-        GPIO.cleanup()
+        #GPIO.cleanup()
 
 
     def pump_idrophonics(self,gpio_pump, gpio_sensor, max_irrigation_time):
@@ -105,32 +113,33 @@ class aeroHelper():
         :param gpio: GPIO number
         :param max_irrigation_time: (s), maximum time that the pump is activated
         '''
-        import RPi.GPIO as GPIO
         from time import sleep
-
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        GPIO.setup(gpio_pump, GPIO.OUT)
-        GPIO.setup(gpio_sensor, GPIO.IN)
+        
+        # import RPi.GPIO as GPIO
+        # GPIO.setmode(GPIO.BCM)
+        # GPIO.setwarnings(False)
+        # GPIO.setup(gpio_pump, GPIO.OUT)
+        # GPIO.setup(gpio_sensor, GPIO.IN)
 
         
-        if GPIO.input(gpio_sensor) == 0:
+        if self.gpios.input(gpio_sensor) == 0:
             self.logger.info('IDROPONICS: Water level high')
-            GPIO.cleanup()
+            #GPIO.cleanup()
         else:
-            GPIO.output(gpio_pump, False) #turning on pump
+            self.gpios.output(gpio_pump, False) #turning on pump
             self.logger.info('IDROPONICS: Water level low, turning ON the pump')
 
             for i in range(max_irrigation_time):
-                if GPIO.input(gpio_sensor) == 0:
-                    GPIO.output(gpio_pump, True) #turning off pump
+                if self.gpios.input(gpio_sensor) == 0:
+                    self.gpios.output(gpio_pump, True) #turning off pump
                     self.logger.info('IDROPONICS: Water level high. Stopping the pump')
-                    GPIO.cleanup()
+                    #GPIO.cleanup()
                     break
                 sleep(1)
 
     
-  
+
+         
 
 
 

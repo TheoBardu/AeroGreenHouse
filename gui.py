@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 import yaml
 import json
 import os
+import sys
 from pathlib import Path
 
 class AeroGreenHouseGUI:
@@ -51,6 +52,11 @@ class AeroGreenHouseGUI:
         jobs_frame = ttk.Frame(notebook)
         notebook.add(jobs_frame, text="Gestione Job")
         self.create_jobs_tab(jobs_frame)
+        
+        # Tab 3: Output/Log
+        output_frame = ttk.Frame(notebook)
+        notebook.add(output_frame, text="Output/Log")
+        self.create_output_tab(output_frame)
         
     def create_config_tab(self, parent):
         """Tab per modificare la configurazione"""
@@ -147,6 +153,48 @@ class AeroGreenHouseGUI:
         
         ttk.Button(toggle_frame, text="✅ Attiva Job", command=self.toggle_job_on).pack(side=tk.LEFT, padx=5)
         ttk.Button(toggle_frame, text="❌ Disattiva Job", command=self.toggle_job_off).pack(side=tk.LEFT, padx=5)
+        
+    def create_output_tab(self, parent):
+        """Tab per visualizzare gli output del terminale e log"""
+        # Frame superiore con bottoni
+        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(btn_frame, text="🔄 Aggiorna", command=self.refresh_output).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="📋 Pulisci Output", command=self.clear_output).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="📂 Apri File Log", command=self.open_log_file).pack(side=tk.LEFT, padx=5)
+        
+        # Info sul file log
+        info_frame = ttk.Frame(parent)
+        info_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(info_frame, text="File Log:", font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
+        self.log_file_label = ttk.Label(info_frame, text="", foreground="blue")
+        self.log_file_label.pack(side=tk.LEFT, padx=5)
+        
+        # Frame per il testo (output)
+        text_frame = ttk.LabelFrame(parent, text="Output Terminale", padding=5)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Text widget con scrollbar
+        scrollbar = ttk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.output_text = tk.Text(text_frame, yscrollcommand=scrollbar.set, 
+                                    wrap=tk.WORD, font=('Courier', 9), height=20)
+        self.output_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.output_text.yview)
+        
+        # Configura i tag per i colori
+        self.output_text.tag_config('info', foreground='green')
+        self.output_text.tag_config('warning', foreground='orange')
+        self.output_text.tag_config('error', foreground='red')
+        self.output_text.tag_config('debug', foreground='gray')
+        
+        # Aggiorna il label con il file log
+        self.update_log_file_label()
+        
+        # Carica il contenuto iniziale
+        self.refresh_output()
         
     def refresh_jobs_list(self):
         """Aggiorna la lista dei job nel Treeview"""
@@ -333,6 +381,95 @@ class AeroGreenHouseGUI:
         self.log_level_var.set(self.config.get('log', {}).get('level', 'INFO'))
         self.reload_interval_var.set(str(self.config.get('config_reload_interval', 4)))
         messagebox.showinfo("Successo", "Configurazione ricaricata!")
+    
+    def update_log_file_label(self):
+        """Aggiorna il label con il percorso del file log"""
+        log_dir = self.config.get('log', {}).get('directory', '')
+        log_file = self.config.get('log', {}).get('filename', '')
+        full_path = os.path.join(log_dir, log_file) if log_dir and log_file else 'Non configurato'
+        self.log_file_label.config(text=full_path)
+    
+    def get_log_file_path(self):
+        """Ritorna il percorso completo del file log"""
+        log_dir = self.config.get('log', {}).get('directory', '')
+        log_file = self.config.get('log', {}).get('filename', '')
+        return os.path.join(log_dir, log_file) if log_dir and log_file else None
+    
+    def refresh_output(self):
+        """Carica e visualizza il contenuto del file di log"""
+        try:
+            log_path = self.get_log_file_path()
+            
+            if not log_path or not os.path.exists(log_path):
+                self.output_text.config(state=tk.NORMAL)
+                self.output_text.delete(1.0, tk.END)
+                self.output_text.insert(tk.END, "❌ File di log non trovato o non configurato.\n", 'error')
+                self.output_text.insert(tk.END, f"Percorso atteso: {log_path}", 'warning')
+                self.output_text.config(state=tk.DISABLED)
+                return
+            
+            # Leggi il file log
+            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            # Visualizza il contenuto
+            self.output_text.config(state=tk.NORMAL)
+            self.output_text.delete(1.0, tk.END)
+            
+            # Colora le linee in base al livello di log
+            lines = content.split('\n')
+            for line in lines:
+                if '[ERROR]' in line or '[CRITICAL]' in line:
+                    self.output_text.insert(tk.END, line + '\n', 'error')
+                elif '[WARNING]' in line:
+                    self.output_text.insert(tk.END, line + '\n', 'warning')
+                elif '[DEBUG]' in line:
+                    self.output_text.insert(tk.END, line + '\n', 'debug')
+                elif '[INFO]' in line:
+                    self.output_text.insert(tk.END, line + '\n', 'info')
+                else:
+                    self.output_text.insert(tk.END, line + '\n')
+            
+            # Scroll verso il fondo
+            self.output_text.see(tk.END)
+            self.output_text.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self.output_text.config(state=tk.NORMAL)
+            self.output_text.delete(1.0, tk.END)
+            self.output_text.insert(tk.END, f"❌ Errore nel caricamento del log:\n{str(e)}", 'error')
+            self.output_text.config(state=tk.DISABLED)
+    
+    def clear_output(self):
+        """Pulisce il contenuto visualizzato (non il file vero)"""
+        if messagebox.askyesno("Conferma", "Sei sicuro di voler pulire l'output visualizzato?"):
+            self.output_text.config(state=tk.NORMAL)
+            self.output_text.delete(1.0, tk.END)
+            self.output_text.insert(tk.END, "Output pulito.\n")
+            self.output_text.config(state=tk.DISABLED)
+    
+    def open_log_file(self):
+        """Apre il file di log nell'editor predefinito"""
+        try:
+            import sys
+            log_path = self.get_log_file_path()
+            
+            if not log_path or not os.path.exists(log_path):
+                messagebox.showwarning("Avviso", "File di log non trovato.")
+                return
+            
+            # Windows
+            if os.name == 'nt':
+                os.startfile(log_path)
+            # macOS
+            elif sys.platform == 'darwin':
+                os.system(f'open "{log_path}"')
+            # Linux
+            else:
+                os.system(f'xdg-open "{log_path}"')
+                
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile aprire il file: {str(e)}")
 
 
 if __name__ == '__main__':

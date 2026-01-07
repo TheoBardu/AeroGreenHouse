@@ -2,10 +2,10 @@ T_var:
   Topt: 18
 
 dht22:
-  pin: 27
+  pin: 23
 
 log:
-  directory: "/Users/theo/Desktop/test/"
+  directory: "/home/fishnplants/Desktop/"
   filename: "FnP_AeroGreenHouse.log"
   level: "INFO"
 
@@ -14,13 +14,18 @@ config_reload_interval: 4   # secondi
 gpio_pins:
   - name: "AEROPONICS"
     pin: 17
-    interval: 3
-    on_time: 10
+    what_type: "pump"
+    interval: 8
+    on_time: 3
 
   - name: "IDROPONICS"
-    pin_pump: 27
-    pin_sensor: 15
-    interval: 2
-    on_time: 20
+    pin: 27
+    what_type: "pump"
+    interval: 6
+    on_time: 2
+
+  - name: "MOISTURE"
+    pin: 13
+    what_type: "sensor"
 
 
