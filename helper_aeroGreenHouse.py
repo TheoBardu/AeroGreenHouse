@@ -35,7 +35,7 @@ class aeroHelper():
         self.logger = logging.getLogger(__name__)
         self.logger.info('#### Started FnP AeroSystems ###')
 
-        # self.initialize_gpio(self.configs)
+        self.initialize_gpio(self.configs)
 
     
 
