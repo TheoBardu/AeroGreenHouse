@@ -19,10 +19,10 @@ def runner(job,*args, **kwargs):
 
 
 #Setting up aerophonics
-schedule.every(ah.configs['gpio_pins'][0]['interval']).minutes.do(runner, ah.pump_aerophonics, gpio=ah.configs['gpio_pins'][0]['pin'] , irrigation_time=ah.configs['gpio_pins'][0]['on_time'])
+aeroJOB = schedule.every(ah.configs['gpio_pins'][0]['interval']).minutes.do(runner, ah.pump_aerophonics, gpio=ah.configs['gpio_pins'][0]['pin'] , irrigation_time=ah.configs['gpio_pins'][0]['on_time'])
 
 #Setting up Idrophonics
-schedule.every(ah.configs['gpio_pins'][1]['interval']).minutes.do(runner, ah.pump_idrophonics, gpio_pump = ah.configs['gpio_pins'][1]['pin'], gpio_sensor = ah.configs['gpio_pins'][2]['pin'], max_irrigation_time = ah.configs['gpio_pins'][1]['on_time'] )
+idroJOB = schedule.every(ah.configs['gpio_pins'][1]['interval']).minutes.do(runner, ah.pump_idrophonics, gpio_pump = ah.configs['gpio_pins'][1]['pin'], gpio_sensor = ah.configs['gpio_pins'][2]['pin'], max_irrigation_time = ah.configs['gpio_pins'][1]['on_time'] )
 
 try:
     while True:

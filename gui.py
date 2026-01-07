@@ -5,6 +5,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from helper_aeroGreenHouse import aeroHelper
+import schedule
+import threading
+from time import sleep
 
 class AeroGreenHouseGUI:
     def __init__(self, root):
@@ -18,6 +22,7 @@ class AeroGreenHouseGUI:
         
         self.create_widgets()
         self.refresh_jobs_list()
+        self.ah = aeroHelper()
         
     def load_config(self):
         """Carica la configurazione dal file YAML"""
@@ -332,17 +337,44 @@ class AeroGreenHouseGUI:
         ttk.Button(edit_window, text="Salva Modifiche", command=save_changes).grid(row=4, column=0, columnspan=2, pady=20)
     
     def toggle_job_on(self):
-        """Attiva il job selezionato"""
+        """Attiva il job selezionato"""    
+        
+        def activate_job():
+            while True:
+                schedule.run_pending()
+                sleep(1)
+
         selected = self.jobs_tree.selection()
+    
+        
         if not selected:
             messagebox.showwarning("Avviso", "Selezionare un job da attivare")
             return
         
+        # Get the values 
         item = selected[0]
-        name = self.jobs_tree.item(item, 'values')[0]
+        name = str(self.jobs_tree.item(item, 'values')[0])
+        pin = int(self.jobs_tree.item(item, 'values')[1])
+        interval = int(self.jobs_tree.item(item, 'values')[2])
+        on_time = int(self.jobs_tree.item(item, 'values')[3])
+
+
         self.active_jobs[name] = 'Attivo'
         self.refresh_jobs_list()
+
+        if name == 'AEROPONICS':
+            self.aeroJOB = schedule.every(interval).minutes.do(self.ah.runner, self.ah.pump_aerophonics, gpio=pin , irrigation_time=on_time)
+        elif name == 'IDROPONICS':
+            self.idroJOB = schedule.every(interval).minutes.do(self.ah.runner, self.ah.pump_idrophonics, gpio_pump = pin, gpio_sensor = self.ah.configs['gpio_pins'][2]['pin'], max_irrigation_time = on_time )
+        else:
+            messagebox.showinfo('Job name not correct. Please inisert AEROPONICS or IDROPONICS for now')
+        
+        job_activation_thread = threading.Thread(target=activate_job)
+        job_activation_thread.start()
+        
+        
         messagebox.showinfo("Successo", f"Job '{name}' attivato!")
+
     
     def toggle_job_off(self):
         """Disattiva il job selezionato"""
@@ -355,6 +387,14 @@ class AeroGreenHouseGUI:
         name = self.jobs_tree.item(item, 'values')[0]
         self.active_jobs[name] = 'Inattivo'
         self.refresh_jobs_list()
+
+        if name == 'AEROPONICS':
+            schedule.cancel_job(self.aeroJOB)
+        elif name == 'IDROPONICS':
+            schedule.cancel_job(self.idroJOB)
+        else:
+            messagebox.showinfo('Job name not correct. Please inisert AEROPONICS or IDROPONICS for now')
+        
         messagebox.showinfo("Successo", f"Job '{name}' disattivato!")
     
     def save_config_changes(self):

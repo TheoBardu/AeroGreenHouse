@@ -1,3 +1,4 @@
+import threading
 class aeroHelper():
 
     '''
@@ -34,7 +35,7 @@ class aeroHelper():
         self.logger = logging.getLogger(__name__)
         self.logger.info('#### Started FnP AeroSystems ###')
 
-        self.initialize_gpio(self.configs)
+        # self.initialize_gpio(self.configs)
 
     
 
@@ -43,6 +44,17 @@ class aeroHelper():
         with open(file_name, "r") as f:
             return yaml.safe_load(f)
     
+
+    def runner(job,*args, **kwargs):
+        '''
+        Function that runs in multi-thread the AeroSystems jobs
+        
+        :param job: Name of the function to run
+        :param args: Arguments of the function <job>
+        :param kwargs: Keyworkds arguments of the function <job>
+        '''
+        job_thread = threading.Thread(target=job, args=args, kwargs=kwargs)
+        job_thread.start()
 
     ###########################################
     # GPIO pins for watering (PUMPs)
