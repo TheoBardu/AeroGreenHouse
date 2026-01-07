@@ -9,6 +9,23 @@ from helper_aeroGreenHouse import aeroHelper
 import schedule
 import threading
 from time import sleep
+import logging
+from queue import Queue
+
+
+class GUILoggingHandler(logging.Handler):
+    """Custom logging handler that sends log records to a GUI text widget queue"""
+    def __init__(self, log_queue):
+        super().__init__()
+        self.log_queue = log_queue
+    
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.log_queue.put((msg, record.levelname))
+        except Exception:
+            self.handleError(record)
+
 
 class AeroGreenHouseGUI:
     def __init__(self, root):
@@ -20,9 +37,23 @@ class AeroGreenHouseGUI:
         self.config = self.load_config()
         self.active_jobs = {}  # Per tracciare i job attivi/inattivi
         
+        # Thread tracking for active jobs
+        self.job_threads = {}  # {job_name: thread_object}
+        self.job_stop_flags = {}  # {job_name: stop_flag}
+        self.thread_lock = threading.Lock()  # For thread-safe operations
+        
+        # Logging queue for GUI updates
+        self.log_queue = Queue()
+        
         self.create_widgets()
         self.refresh_jobs_list()
         self.ah = aeroHelper()
+        
+        # Setup GUI logging handler
+        self.setup_gui_logging_handler()
+        
+        # Start the log queue processor
+        self.process_log_queue()
         
     def load_config(self):
         """Carica la configurazione dal file YAML"""
@@ -32,6 +63,41 @@ class AeroGreenHouseGUI:
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nel caricamento del config: {e}")
             return {}
+    
+    def setup_gui_logging_handler(self):
+        """Setup custom logging handler to display logs in GUI"""
+        gui_handler = GUILoggingHandler(self.log_queue)
+        formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        gui_handler.setFormatter(formatter)
+        
+        # Add handler to the aeroHelper logger
+        self.ah.logger.addHandler(gui_handler)
+    
+    def process_log_queue(self):
+        """Process log messages from queue and display in GUI text widget"""
+        try:
+            while True:
+                msg, level = self.log_queue.get_nowait()
+                # Determine tag based on log level
+                if level in ['ERROR', 'CRITICAL']:
+                    tag = 'error'
+                elif level == 'WARNING':
+                    tag = 'warning'
+                elif level == 'DEBUG':
+                    tag = 'debug'
+                else:
+                    tag = 'info'
+                
+                # Add message to output text widget
+                self.output_text.config(state=tk.NORMAL)
+                self.output_text.insert(tk.END, msg + '\n', tag)
+                self.output_text.see(tk.END)
+                self.output_text.config(state=tk.DISABLED)
+        except:
+            pass
+        
+        # Schedule next check
+        self.root.after(100, self.process_log_queue)
     
     def save_config(self):
         """Salva la configurazione nel file YAML"""
@@ -337,15 +403,8 @@ class AeroGreenHouseGUI:
         ttk.Button(edit_window, text="Salva Modifiche", command=save_changes).grid(row=4, column=0, columnspan=2, pady=20)
     
     def toggle_job_on(self):
-        """Attiva il job selezionato"""    
-        
-        def activate_job():
-            while True:
-                schedule.run_pending()
-                sleep(1)
-
+        """Attiva il job selezionato in un thread separato"""
         selected = self.jobs_tree.selection()
-    
         
         if not selected:
             messagebox.showwarning("Avviso", "Selezionare un job da attivare")
@@ -358,21 +417,57 @@ class AeroGreenHouseGUI:
         interval = int(self.jobs_tree.item(item, 'values')[2])
         on_time = int(self.jobs_tree.item(item, 'values')[3])
 
-
+        # Check if job is already running
+        with self.thread_lock:
+            if name in self.job_threads and self.job_threads[name].is_alive():
+                messagebox.showwarning("Avviso", f"Job '{name}' è già in esecuzione!")
+                return
+        
+        # Create stop flag for this job
+        self.job_stop_flags[name] = False
+        
+        # Create and start the job thread
+        def run_job():
+            """Run the job repeatedly with the specified interval"""
+            import time
+            self.ah.logger.info(f"Job '{name}' avviato. Intervallo: {interval} minuti, Tempo attivazione: {on_time}s")
+            
+            while not self.job_stop_flags.get(name, False):
+                try:
+                    if name == 'AEROPONICS':
+                        self.ah.pump_aerophonics(gpio=pin, irrigation_time=on_time)
+                    elif name == 'IDROPONICS':
+                        sensor_pin = self.ah.configs['gpio_pins'][2]['pin']
+                        self.ah.pump_idrophonics(gpio_pump=pin, gpio_sensor=sensor_pin, max_irrigation_time=on_time)
+                    else:
+                        self.ah.logger.error(f"Nome job non corretto: {name}. Usare 'AEROPONICS' o 'IDROPONICS'")
+                        break
+                    
+                    # Wait for the interval before next execution
+                    wait_time = interval * 60  # Convert minutes to seconds
+                    start_wait = time.time()
+                    while (time.time() - start_wait) < wait_time:
+                        if self.job_stop_flags.get(name, False):
+                            break
+                        time.sleep(1)
+                
+                except Exception as e:
+                    self.ah.logger.error(f"Errore durante l'esecuzione di '{name}': {str(e)}")
+                    break
+            
+            self.ah.logger.info(f"Job '{name}' interrotto")
+        
+        # Start job thread
+        job_thread = threading.Thread(target=run_job, daemon=True)
+        
+        with self.thread_lock:
+            self.job_threads[name] = job_thread
+        
+        job_thread.start()
+        
+        # Update UI
         self.active_jobs[name] = 'Attivo'
         self.refresh_jobs_list()
-
-        if name == 'AEROPONICS':
-            self.aeroJOB = schedule.every(interval).minutes.do(self.ah.runner, self.ah.pump_aerophonics, gpio=pin , irrigation_time=on_time)
-        elif name == 'IDROPONICS':
-            self.idroJOB = schedule.every(interval).minutes.do(self.ah.runner, self.ah.pump_idrophonics, gpio_pump = pin, gpio_sensor = self.ah.configs['gpio_pins'][2]['pin'], max_irrigation_time = on_time )
-        else:
-            messagebox.showinfo('Job name not correct. Please inisert AEROPONICS or IDROPONICS for now')
-        
-        job_activation_thread = threading.Thread(target=activate_job)
-        job_activation_thread.start()
-        
-        
         messagebox.showinfo("Successo", f"Job '{name}' attivato!")
 
     
@@ -385,16 +480,30 @@ class AeroGreenHouseGUI:
         
         item = selected[0]
         name = self.jobs_tree.item(item, 'values')[0]
+        
+        # Set stop flag for this job
+        with self.thread_lock:
+            if name not in self.job_threads or not self.job_threads[name].is_alive():
+                messagebox.showwarning("Avviso", f"Job '{name}' non è in esecuzione")
+                return
+            
+            self.job_stop_flags[name] = True
+        
+        # Wait a bit for the thread to finish
+        timeout = 5
+        start_time = threading.Event()
+        start_time.set()
+        wait_time = 0
+        while wait_time < timeout:
+            with self.thread_lock:
+                if not self.job_threads[name].is_alive():
+                    break
+            sleep(0.5)
+            wait_time += 0.5
+        
+        # Update UI
         self.active_jobs[name] = 'Inattivo'
         self.refresh_jobs_list()
-
-        if name == 'AEROPONICS':
-            schedule.cancel_job(self.aeroJOB)
-        elif name == 'IDROPONICS':
-            schedule.cancel_job(self.idroJOB)
-        else:
-            messagebox.showinfo('Job name not correct. Please inisert AEROPONICS or IDROPONICS for now')
-        
         messagebox.showinfo("Successo", f"Job '{name}' disattivato!")
     
     def save_config_changes(self):
