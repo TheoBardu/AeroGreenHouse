@@ -2,6 +2,7 @@ T_var:
   Topt: 18.0
 dht22:
   pin: 23
+  read_interval: 5
 log:
   directory: /home/fishnplants/Desktop/
   filename: FnP_AeroGreenHouse.log

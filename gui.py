@@ -42,6 +42,10 @@ class AeroGreenHouseGUI:
         self.job_stop_flags = {}  # {job_name: stop_flag}
         self.thread_lock = threading.Lock()  # For thread-safe operations
         
+        # Thread tracking for ambient reading
+        self.ambient_thread = None
+        self.ambient_stop_flag = False
+        
         # Logging queue for GUI updates
         self.log_queue = Queue()
         
@@ -128,6 +132,11 @@ class AeroGreenHouseGUI:
         output_frame = ttk.Frame(notebook)
         notebook.add(output_frame, text="Output/Log")
         self.create_output_tab(output_frame)
+
+        # Tab 4: TH and VPD (ambient)
+        ambient_frame = ttk.Frame(notebook)
+        notebook.add(ambient_frame, text="Ambient")
+        self.create_ambient_tab(ambient_frame)
         
     def create_config_tab(self, parent):
         """Tab per modificare la configurazione"""
@@ -146,6 +155,10 @@ class AeroGreenHouseGUI:
         ttk.Label(dht_frame, text="Pin:").grid(row=0, column=0, sticky=tk.W)
         self.dht_pin_var = tk.StringVar(value=str(self.config.get('dht22', {}).get('pin', 27)))
         ttk.Entry(dht_frame, textvariable=self.dht_pin_var, width=10).grid(row=0, column=1, sticky=tk.W)
+        
+        ttk.Label(dht_frame, text="Intervallo Lettura (s):").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
+        self.dht_interval_var = tk.StringVar(value=str(self.config.get('dht22', {}).get('read_interval', 5)))
+        ttk.Entry(dht_frame, textvariable=self.dht_interval_var, width=10).grid(row=0, column=3, sticky=tk.W)
         
         # Frame per Log
         log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
@@ -511,6 +524,7 @@ class AeroGreenHouseGUI:
         try:
             self.config['T_var']['Topt'] = float(self.t_opt_var.get())
             self.config['dht22']['pin'] = int(self.dht_pin_var.get())
+            self.config['dht22']['read_interval'] = int(self.dht_interval_var.get())
             self.config['log']['directory'] = self.log_dir_var.get()
             self.config['log']['filename'] = self.log_file_var.get()
             self.config['log']['level'] = self.log_level_var.get()
@@ -525,6 +539,7 @@ class AeroGreenHouseGUI:
         self.config = self.load_config()
         self.t_opt_var.set(str(self.config.get('T_var', {}).get('Topt', 18)))
         self.dht_pin_var.set(str(self.config.get('dht22', {}).get('pin', 27)))
+        self.dht_interval_var.set(str(self.config.get('dht22', {}).get('read_interval', 5)))
         self.log_dir_var.set(self.config.get('log', {}).get('directory', ''))
         self.log_file_var.set(self.config.get('log', {}).get('filename', ''))
         self.log_level_var.set(self.config.get('log', {}).get('level', 'INFO'))
@@ -597,6 +612,149 @@ class AeroGreenHouseGUI:
             self.output_text.insert(tk.END, "Output pulito.\n")
             self.output_text.config(state=tk.DISABLED)
     
+    def create_ambient_tab(self, parent):
+        """Tab per monitorare i dati di temperatura, umidità e VPD"""
+        from datetime import datetime
+        
+        # Frame superiore con bottoni
+        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(btn_frame, text="▶️ Attiva Lettura", command=self.start_ambient_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="⏹️ Arresta Lettura", command=self.stop_ambient_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="📊 Leggi Adesso", command=self.read_ambient_now).pack(side=tk.LEFT, padx=5)
+        
+        # Frame principale per i dati
+        main_frame = ttk.LabelFrame(parent, text="AMBIENT", padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Crea un frame interno per centrare il contenuto
+        inner_frame = ttk.Frame(main_frame)
+        inner_frame.pack(expand=True)
+        
+        # Temperatura
+        temp_frame = ttk.Frame(inner_frame)
+        temp_frame.pack(pady=10)
+        ttk.Label(temp_frame, text="Temperatura", font=('Arial', 16, 'bold')).pack()
+        self.ambient_temp_label = ttk.Label(temp_frame, text="-- °C", font=('Arial', 24, 'bold'), foreground="#207abb")
+        self.ambient_temp_label.pack()
+        
+        # Umidità
+        humid_frame = ttk.Frame(inner_frame)
+        humid_frame.pack(pady=10)
+        ttk.Label(humid_frame, text="Umidità", font=('Arial', 16, 'bold')).pack()
+        self.ambient_humid_label = ttk.Label(humid_frame, text="-- %", font=('Arial', 24, 'bold'), foreground='#ff7f0e')
+        self.ambient_humid_label.pack()
+        
+        # VPD
+        vpd_frame = ttk.Frame(inner_frame)
+        vpd_frame.pack(pady=10)
+        ttk.Label(vpd_frame, text="VPD", font=('Arial', 16, 'bold')).pack()
+        self.ambient_vpd_label = ttk.Label(vpd_frame, text="-- kPa", font=('Arial', 24, 'bold'), foreground='#2ca02c')
+        self.ambient_vpd_label.pack()
+        
+        # Timestamp della lettura
+        self.ambient_timestamp_label = ttk.Label(inner_frame, text="Ultimo aggiornamento: --", 
+                                                  font=('Arial', 12, 'italic'), foreground='gray')
+        self.ambient_timestamp_label.pack(pady=20)
+    
+    def start_ambient_reading(self):
+        """Avvia la lettura temporizzata dei dati ambient"""
+        if self.ambient_thread is not None and self.ambient_thread.is_alive():
+            messagebox.showwarning("Avviso", "Lettura ambient già in corso!")
+            return
+        
+        self.ambient_stop_flag = False
+        
+        def ambient_read_loop():
+            """Loop per letture periodiche"""
+            import time
+            from datetime import datetime
+            
+            interval = self.config.get('dht22', {}).get('read_interval', 5)
+            pin = self.config.get('dht22', {}).get('pin', 27)
+            
+            self.ah.logger.info(f"Inizio lettura AMBIENT. Intervallo: {interval}s, Pin: {pin}")
+            
+            while not self.ambient_stop_flag:
+                try:
+                    # Leggi i dati
+                    temp, humidity = self.ah.measure_dht22(pin)
+                    vpd = self.ah.VPD(temp, humidity)
+
+                    
+                    # Ottieni timestamp
+                    timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    
+                    # Aggiorna GUI
+                    self.ambient_temp_label.config(text=f"{temp:.1f} °C")
+                    self.ambient_humid_label.config(text=f"{humidity:.1f} %")
+                    self.ambient_vpd_label.config(text=f"{vpd:.2f} kPa")
+                    self.ambient_timestamp_label.config(text=f"Ultimo aggiornamento: {timestamp}")
+                    
+                    self.ah.logger.info(f"AMBIENT: T={temp:.2f}°C, H={humidity:.2f}%, VPD={vpd:.4f}kPa")
+                    
+                    # Attendi l'intervallo
+                    time.sleep(interval)
+                    
+                except Exception as e:
+                    self.ah.logger.error(f"Errore lettura AMBIENT: {str(e)}")
+                    time.sleep(interval)
+            
+            self.ah.logger.info("Lettura AMBIENT interrotta")
+        
+        self.ambient_thread = threading.Thread(target=ambient_read_loop, daemon=True)
+        self.ambient_thread.start()
+        messagebox.showinfo("Successo", "Lettura ambient avviata!")
+    
+    def stop_ambient_reading(self):
+        """Arresta la lettura temporizzata dei dati ambient"""
+        if self.ambient_thread is None or not self.ambient_thread.is_alive():
+            messagebox.showwarning("Avviso", "Nessuna lettura in corso")
+            return
+        
+        self.ambient_stop_flag = True
+        
+        # Attendi che il thread finisca
+        timeout = 5
+        start_time = threading.Event()
+        start_time.set()
+        wait_time = 0
+        while wait_time < timeout:
+            if not self.ambient_thread.is_alive():
+                break
+            sleep(0.5)
+            wait_time += 0.5
+        
+        messagebox.showinfo("Successo", "Lettura ambient arrestata!")
+    
+    def read_ambient_now(self):
+        """Legge immediatamente i dati ambient"""
+        try:
+            from datetime import datetime
+            
+            pin = self.config.get('dht22', {}).get('pin', 27)
+            
+            # Leggi i dati
+            temp, humidity = self.ah.measure_dht22(pin)
+            vpd = self.ah.VPD(temp, humidity)
+            
+            # Ottieni timestamp
+            timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            
+            # Aggiorna GUI
+            self.ambient_temp_label.config(text=f"{temp:.2f} °C")
+            self.ambient_humid_label.config(text=f"{humidity:.2f} %")
+            self.ambient_vpd_label.config(text=f"{vpd:.4f} kPa")
+            self.ambient_timestamp_label.config(text=f"Ultimo aggiornamento: {timestamp}")
+            
+            self.ah.logger.info(f"AMBIENT (lettura immediata): T={temp:.2f}°C, H={humidity:.2f}%, VPD={vpd:.4f}kPa")
+            messagebox.showinfo("Successo", f"Lettura completata:\nT={temp:.2f}°C\nH={humidity:.2f}%\nVPD={vpd:.4f}kPa")
+            
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella lettura: {str(e)}")
+            self.ah.logger.error(f"Errore lettura AMBIENT immediata: {str(e)}")
+    
     def open_log_file(self):
         """Apre il file di log nell'editor predefinito"""
         try:
@@ -619,9 +777,8 @@ class AeroGreenHouseGUI:
                 
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile aprire il file: {str(e)}")
-
-
-if __name__ == '__main__':
+    
+if __name__ == "__main__":
     root = tk.Tk()
     gui = AeroGreenHouseGUI(root)
     root.mainloop()

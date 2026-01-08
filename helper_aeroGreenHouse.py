@@ -21,7 +21,7 @@ class aeroHelper():
 
         #Log file
         log_dir = self.configs["log"]["directory"]
-        os.makedirs(log_dir, exist_ok=True)
+        # os.makedirs(log_dir, exist_ok=True)
 
         logging.basicConfig(
             level=getattr(logging, self.configs["log"]["level"].upper(), logging.INFO),
