@@ -200,6 +200,14 @@ class aeroHelper():
         return VPD
 
 
+    def save_TH_measure(self,T,H,vpd,loc='/home/fishnplants/Desktop/data/TH/', name_data_out = 'TH%s.txt', format_data_out= "%s\t %5.2f°C\t %5.2f%%\t %5.4fkPa \n"):
+        '''
+        Function for saving the TH measure
+        '''
+        fid = open(loc+name_data_out)
+        return 
+        
+
     ###########################################
     # Irrigation time modifier for Aerophonics
     ###########################################

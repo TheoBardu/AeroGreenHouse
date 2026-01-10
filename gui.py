@@ -685,7 +685,9 @@ class AeroGreenHouseGUI:
                     
                     # Ottieni timestamp
                     timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    file_name = datetime.now().strftime("%Y_%m_%d")
                     
+
                     # Aggiorna GUI
                     self.ambient_temp_label.config(text=f"{temp:.1f} °C")
                     self.ambient_humid_label.config(text=f"{humidity:.1f} %")
@@ -694,6 +696,13 @@ class AeroGreenHouseGUI:
                     
                     self.ah.logger.info(f"AMBIENT: T={temp:.2f}°C, H={humidity:.2f}%, VPD={vpd:.4f}kPa")
                     
+                    # salva file
+                    format_data_out= "%s\t %5.2f°C\t %5.2f%%\t %5.4fkPa \n"
+                    fid = open('/home/fishnplants/Desktop/data/TH/'+'TH_'+file_name+'.txt','a')
+                    fid.write(format_data_out%(timestamp, temp, humidity, vpd))
+                    fid.close()
+
+
                     # Attendi l'intervallo
                     time.sleep(interval)
                     
