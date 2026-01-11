@@ -1,13 +1,19 @@
 T_var:
   Topt: 18.0
+
 dht22:
   pin: 23
   read_interval: 5
+  save : True
+  saving_dir : /home/fishnplants/Desktop/data/TH/
+
 log:
   directory: /home/fishnplants/Desktop/
   filename: FnP_AeroGreenHouse.log
   level: INFO
+
 config_reload_interval: 4
+
 gpio_pins:
 - name: AEROPONICS
   pin: 15

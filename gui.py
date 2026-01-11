@@ -415,6 +415,8 @@ class AeroGreenHouseGUI:
         
         ttk.Button(edit_window, text="Salva Modifiche", command=save_changes).grid(row=4, column=0, columnspan=2, pady=20)
     
+
+    
     def toggle_job_on(self):
         """Attiva il job selezionato in un thread separato"""
         selected = self.jobs_tree.selection()
@@ -430,58 +432,47 @@ class AeroGreenHouseGUI:
         interval = int(self.jobs_tree.item(item, 'values')[2])
         on_time = int(self.jobs_tree.item(item, 'values')[3])
 
-        # Check if job is already running
-        with self.thread_lock:
-            if name in self.job_threads and self.job_threads[name].is_alive():
-                messagebox.showwarning("Avviso", f"Job '{name}' è già in esecuzione!")
+        # parte di codice legata ad AEROPONICS
+        if name == 'AEROPONICS':
+            
+            # check if the job is already running
+            if self.ah.aeroponics_job_active:
+                messagebox.showwarning("Avviso", f"Il job {name} è già in esecuzione!")
                 return
-        
-        # Create stop flag for this job
-        self.job_stop_flags[name] = False
-        
-        # Create and start the job thread
-        def run_job():
-            """Run the job repeatedly with the specified interval"""
-            import time
-            self.ah.logger.info(f"Job '{name}' avviato. Intervallo: {interval} minuti, Tempo attivazione: {on_time}s")
             
-            while not self.job_stop_flags.get(name, False):
-                try:
-                    if name == 'AEROPONICS':
-                        self.ah.pump_aerophonics(gpio=pin, irrigation_time=on_time)
-                    elif name == 'IDROPONICS':
-                        sensor_pin = self.ah.configs['gpio_pins'][2]['pin']
-                        self.ah.pump_idrophonics(gpio_pump=pin, gpio_sensor=sensor_pin, max_irrigation_time=on_time)
-                    else:
-                        self.ah.logger.error(f"Nome job non corretto: {name}. Usare 'AEROPONICS' o 'IDROPONICS'")
-                        break
-                    
-                    # Wait for the interval before next execution
-                    wait_time = interval * 60  # Convert minutes to seconds
-                    start_wait = time.time()
-                    while (time.time() - start_wait) < wait_time:
-                        if self.job_stop_flags.get(name, False):
-                            break
-                        time.sleep(1)
-                
-                except Exception as e:
-                    self.ah.logger.error(f"Errore durante l'esecuzione di '{name}': {str(e)}")
-                    break
+            self.ah.aeroponics_job_active = True # set to True the aeroponics activation value
+
+            job_thread_aeroponics = threading.Thread(target=self.ah.activate_aeroponics, daemon=True)
+            job_thread_aeroponics.start()
+
+            #UI Update
+            self.active_jobs[name] = 'Attivo'
+        
+
+        # parte di codice legata ad IDROPONICS
+        elif name == 'IDROPONICS':
+
+            # check if the job is already running
+            if self.ah.idroponics_job_active:
+                messagebox.showwarning("Avviso", f"Il job {name} è già in esecuzione!")
+                return
             
-            self.ah.logger.info(f"Job '{name}' interrotto")
-        
-        # Start job thread
-        job_thread = threading.Thread(target=run_job, daemon=True)
-        
-        with self.thread_lock:
-            self.job_threads[name] = job_thread
-        
-        job_thread.start()
+            self.ah.idroponics_job_active = True # set to True the idroponics activation value
+
+            job_thread_idroponics = threading.Thread(target=self.ah.activate_idroponics, daemon=True)
+            job_thread_idroponics.start()
+            
+            #UI Update
+            self.active_jobs[name] = 'Attivo'
+
+        else:
+            messagebox.showwarning("Avviso", f"Job '{name}' non riconosciuto per l'attivazione.")
+            return
+    
         
         # Update UI
-        self.active_jobs[name] = 'Attivo'
         self.refresh_jobs_list()
-        messagebox.showinfo("Successo", f"Job '{name}' attivato!")
+        # messagebox.showinfo("Successo", f"Job '{name}' attivato!")
 
     
     def toggle_job_off(self):
@@ -494,31 +485,27 @@ class AeroGreenHouseGUI:
         item = selected[0]
         name = self.jobs_tree.item(item, 'values')[0]
         
-        # Set stop flag for this job
-        with self.thread_lock:
-            if name not in self.job_threads or not self.job_threads[name].is_alive():
-                messagebox.showwarning("Avviso", f"Job '{name}' non è in esecuzione")
-                return
-            
-            self.job_stop_flags[name] = True
+        # parte di codice legata ad AEROPONICS
+        if name == 'AEROPONICS':
+            self.ah.aeroponics_job_active = False # Set the deactivation for aeroponics job
+            self.active_jobs[name] = 'Inattivo'
         
-        # Wait a bit for the thread to finish
-        timeout = 5
-        start_time = threading.Event()
-        start_time.set()
-        wait_time = 0
-        while wait_time < timeout:
-            with self.thread_lock:
-                if not self.job_threads[name].is_alive():
-                    break
-            sleep(0.5)
-            wait_time += 0.5
+        elif name == 'IDROPONICS':
+            self.ah.idroponics_job_active = False # Set the deactivation for idroponics job
+            self.active_jobs[name] = 'Inattivo'
+        else:
+            messagebox.showwarning("Avviso", f"Job '{name}' non riconosciuto per la disattivazione.")
+            return
         
         # Update UI
-        self.active_jobs[name] = 'Inattivo'
+
         self.refresh_jobs_list()
-        messagebox.showinfo("Successo", f"Job '{name}' disattivato!")
+        # messagebox.showinfo("Successo", f"Job '{name}' disattivato!")
     
+
+
+
+
     def save_config_changes(self):
         """Salva i cambiamenti della configurazione"""
         try:
@@ -664,7 +651,7 @@ class AeroGreenHouseGUI:
             messagebox.showwarning("Avviso", "Lettura ambient già in corso!")
             return
         
-        self.ambient_stop_flag = False
+        
         
         def ambient_read_loop():
             """Loop per letture periodiche"""
@@ -698,7 +685,7 @@ class AeroGreenHouseGUI:
                     
                     # salva file
                     format_data_out= "%s\t %5.2f°C\t %5.2f%%\t %5.4fkPa \n"
-                    fid = open('/home/fishnplants/Desktop/data/TH/'+'TH_'+file_name+'.txt','a')
+                    fid = open(self.config.get('dht22', {}).get('saving_dir', '/home/fishnplants/Desktop/data/TH/')+'TH_'+file_name+'.txt','a')
                     fid.write(format_data_out%(timestamp, temp, humidity, vpd))
                     fid.close()
 
@@ -714,7 +701,7 @@ class AeroGreenHouseGUI:
         
         self.ambient_thread = threading.Thread(target=ambient_read_loop, daemon=True)
         self.ambient_thread.start()
-        messagebox.showinfo("Successo", "Lettura ambient avviata!")
+        # messagebox.showinfo("Successo", "Lettura ambient avviata!")
     
     def stop_ambient_reading(self):
         """Arresta la lettura temporizzata dei dati ambient"""

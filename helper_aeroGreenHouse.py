@@ -1,8 +1,15 @@
 import threading
+import schedule
+from time import sleep
+import os
+import logging
+
+
+
 class aeroHelper():
 
     '''
-    Class for aeroGreenHouse
+    Class for aeroGreenHouse JOBs controll
     '''
     
     def __init__(self):
@@ -11,9 +18,6 @@ class aeroHelper():
         
         :param self: Descrizione
         '''
-        import os
-        import logging
-
 
         self.config_file_name = 'config.yaml'
         self.configs = self.load_config(self.config_file_name)
@@ -37,6 +41,15 @@ class aeroHelper():
 
         self.initialize_gpio(self.configs)
 
+
+        #GPIO jobs controll
+        self.aeroponics_job_active = False # controlla se viene eseguito il job aeroponics
+        self.idroponics_job_active = False # controlla se viene eseguito il job idroponics
+        
+        # TH jobs controll
+        self.th_job_active = False #controlla se viene eseguita la lettura dei dati TH
+        self.th_job_saving = False #controlla se viene eseguito il job TH (salvataggio dati TH e VPD)
+
     
 
     def load_config(self, file_name):
@@ -55,6 +68,52 @@ class aeroHelper():
         '''
         job_thread = threading.Thread(target=job, args=args, kwargs=kwargs)
         job_thread.start()
+
+
+    def activate_aeroponics(self):
+        '''
+        Function that activate the AEROPONICS controller system
+        
+        :param 
+        '''
+        
+        self.logger.info('AEROPONICS system control ## ACTIVATED ##')
+        
+        self.aero_schedule = schedule.Scheduler() #scheduler aeroponics
+        self.aero_schedule.every(self.configs['gpio_pins'][0]['interval']).minutes.do(self.pump_aerophonics, gpio=self.configs['gpio_pins'][0]['pin'] , irrigation_time=self.configs['gpio_pins'][0]['on_time'])
+
+        while self.aeroponics_job_active:
+            self.aero_schedule.run_pending()
+            sleep(1)
+        else:
+            self.logger.info('AEROPONICS system control ## DEACTIVATED ##')
+
+
+    def activate_idroponics(self):
+        '''
+        Function that activate the IDROPONICS controller system
+        
+        :param 
+        '''
+        
+        self.logger.info('IDROPONICS system control ## ACTIVATED ##')
+        
+        self.idro_schedule = schedule.Scheduler() #scheduler idroponics
+        self.idro_schedule.every(self.configs['gpio_pins'][1]['interval']).minutes.do(self.pump_idrophonics, gpio_pump = self.configs['gpio_pins'][1]['pin'], gpio_sensor = self.configs['gpio_pins'][2]['pin'], max_irrigation_time = self.configs['gpio_pins'][1]['on_time'] )
+
+        while self.idroponics_job_active:
+            self.idro_schedule.run_pending()
+            sleep(1)
+        else:
+            self.logger.info('IDROPONICS system control ## DEACTIVATED ##')
+
+
+    def deactivate_aeroponics(self):
+        self.aeroponics_job_active = False
+    
+    def deactivate_idroponics(self):
+        self.idroponics_job_active = False
+
 
     ###########################################
     # GPIO pins for watering (PUMPs)
@@ -168,6 +227,7 @@ class aeroHelper():
         import adafruit_dht
         import board
         from time import sleep
+        from datetime import datetime
 
         dht = eval(f"adafruit_dht.DHT22(board.D{gpio})")
 
@@ -186,7 +246,6 @@ class aeroHelper():
                 dht.exit()
                 raise error
         
-
     
     def VPD(self,T,H):
         '''
@@ -200,14 +259,8 @@ class aeroHelper():
         return VPD
 
 
-    def save_TH_measure(self,T,H,vpd,loc='/home/fishnplants/Desktop/data/TH/', name_data_out = 'TH%s.txt', format_data_out= "%s\t %5.2f°C\t %5.2f%%\t %5.4fkPa \n"):
-        '''
-        Function for saving the TH measure
-        '''
-        fid = open(loc+name_data_out)
-        return 
-        
 
+    
     ###########################################
     # Irrigation time modifier for Aerophonics
     ###########################################
