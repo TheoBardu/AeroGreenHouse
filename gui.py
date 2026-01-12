@@ -775,6 +775,11 @@ class AeroGreenHouseGUI:
             messagebox.showerror("Errore", f"Impossibile aprire il file: {str(e)}")
     
 if __name__ == "__main__":
-    root = tk.Tk()
-    gui = AeroGreenHouseGUI(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        gui = AeroGreenHouseGUI(root)
+        root.mainloop()
+    except KeyboardInterrupt:
+        gui.ah.cleanup_gpios()
+        print('Job forced to stop')
+
