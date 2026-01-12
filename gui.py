@@ -416,6 +416,8 @@ class AeroGreenHouseGUI:
         ttk.Button(edit_window, text="Salva Modifiche", command=save_changes).grid(row=4, column=0, columnspan=2, pady=20)
     
 
+
+
     
     def toggle_job_on(self):
         """Attiva il job selezionato in un thread separato"""
@@ -488,10 +490,12 @@ class AeroGreenHouseGUI:
         # parte di codice legata ad AEROPONICS
         if name == 'AEROPONICS':
             self.ah.aeroponics_job_active = False # Set the deactivation for aeroponics job
+            sleep(2)
             self.active_jobs[name] = 'Inattivo'
         
         elif name == 'IDROPONICS':
             self.ah.idroponics_job_active = False # Set the deactivation for idroponics job
+            sleep(2)
             self.active_jobs[name] = 'Inattivo'
         else:
             messagebox.showwarning("Avviso", f"Job '{name}' non riconosciuto per la disattivazione.")
