@@ -155,7 +155,6 @@ class aeroHelper():
         :param irrigation_time: (s), time that the pump is activated
         '''
         
-        from time import sleep
         
         # import RPi.GPIO as GPIO
         # GPIO.setmode(GPIO.BCM)
@@ -174,7 +173,6 @@ class aeroHelper():
                 break
             sleep(1)
         
-        #GPIO.cleanup()
 
 
     def pump_idrophonics(self,gpio_pump, gpio_sensor, max_irrigation_time):
@@ -184,13 +182,6 @@ class aeroHelper():
         :param gpio: GPIO number
         :param max_irrigation_time: (s), maximum time that the pump is activated
         '''
-        from time import sleep
-        
-        # import RPi.GPIO as GPIO
-        # GPIO.setmode(GPIO.BCM)
-        # GPIO.setwarnings(False)
-        # GPIO.setup(gpio_pump, GPIO.OUT)
-        # GPIO.setup(gpio_sensor, GPIO.IN)
 
         
         if self.gpios.input(gpio_sensor) == 0:
