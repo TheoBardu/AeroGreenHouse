@@ -82,7 +82,7 @@ class aeroHelper():
         self.logger.info('AEROPONICS system control ## ACTIVATED ##')
         
         self.aero_schedule = schedule.Scheduler() #scheduler aeroponics
-        self.aero_schedule.every(self.configs['gpio_pins'][0]['interval']).minutes.do(self.pump_aerophonics, gpio=self.configs['gpio_pins'][0]['pin'] , irrigation_time=self.configs['gpio_pins'][0]['on_time'])
+        self.aero_schedule.every(self.configs['gpio_pins'][0]['interval']).minutes.do(self.runner, job= self.pump_aerophonics, gpio=self.configs['gpio_pins'][0]['pin'] , irrigation_time=self.configs['gpio_pins'][0]['on_time'])
 
         while self.aeroponics_job_active:
             self.aero_schedule.run_pending()
@@ -139,6 +139,7 @@ class aeroHelper():
             if g["what_type"] == "sensor":
                 self.gpios.setup(g["pin"], self.gpios.IN)
                 g_list.append(g["pin"])
+                continue
                         
             self.gpios.setup(g["pin"], self.gpios.OUT)
             self.gpios.output(g["pin"], True) #Spengo tutti i pin inizialmente
@@ -161,11 +162,9 @@ class aeroHelper():
         :param irrigation_time: (s), time that the pump is activated
         '''
         
-        
-        # import RPi.GPIO as GPIO
-        # GPIO.setmode(GPIO.BCM)
-        # GPIO.setwarnings(False)
-        # GPIO.setup(gpio, GPIO.OUT)
+        # gpio = self.configs['gpio_pins'][0]['pin']
+        # irrigation_time=self.configs['gpio_pins'][0]['on_time']
+
         self.gpios.output(gpio, False) #turning on pump
         
         self.logger.info('AEROPONICS: Turning on the pump')
