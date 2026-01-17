@@ -23,8 +23,8 @@ gpio_pins:
 - name: IDROPONICS
   pin: 27
   what_type: pump
-  interval: 6
-  on_time: 2
+  interval: 2
+  on_time: 5
 - name: MOISTURE
   pin: 13
   what_type: sensor

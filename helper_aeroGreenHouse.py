@@ -3,6 +3,7 @@ import schedule
 from time import sleep
 import os
 import logging
+
 import RPi.GPIO as GPIO
 
 
@@ -59,7 +60,7 @@ class aeroHelper():
             return yaml.safe_load(f)
     
 
-    def runner(job,*args, **kwargs):
+    def runner(self, job, *args, **kwargs):
         '''
         Function that runs in multi-thread the AeroSystems jobs
         
@@ -67,7 +68,7 @@ class aeroHelper():
         :param args: Arguments of the function <job>
         :param kwargs: Keyworkds arguments of the function <job>
         '''
-        job_thread = threading.Thread(target=job, args=args, kwargs=kwargs)
+        job_thread = threading.Thread(target=job, args=args, kwargs=kwargs, daemon=True)
         job_thread.start()
 
 
@@ -97,10 +98,14 @@ class aeroHelper():
         :param 
         '''
         
+       
+
         self.logger.info('IDROPONICS system control ## ACTIVATED ##')
         
         self.idro_schedule = schedule.Scheduler() #scheduler idroponics
-        self.idro_schedule.every(self.configs['gpio_pins'][1]['interval']).minutes.do(self.pump_idrophonics, gpio_pump = self.configs['gpio_pins'][1]['pin'], gpio_sensor = self.configs['gpio_pins'][2]['pin'], max_irrigation_time = self.configs['gpio_pins'][1]['on_time'] )
+        
+        self.idro_schedule.every(self.configs['gpio_pins'][1]['interval']).minutes.do(self.runner, job = self.pump_idrophonics, gpio_pump = self.configs['gpio_pins'][1]['pin'], gpio_sensor = self.configs['gpio_pins'][2]['pin'], max_irrigation_time = self.configs['gpio_pins'][1]['on_time'] )
+        # self.idro_schedule.every(self.configs['gpio_pins'][1]['interval']).minutes.do(self.runner, self.pump_idrophonics)
 
         while self.idroponics_job_active:
             self.idro_schedule.run_pending()
@@ -176,27 +181,37 @@ class aeroHelper():
         
 
 
-    def pump_idrophonics(self,gpio_pump, gpio_sensor, max_irrigation_time):
+    def pump_idrophonics(self, gpio_pump , gpio_sensor, max_irrigation_time):
         '''
         Function for activating and deactivating the gpio for idroponics watering system
         
         :param gpio: GPIO number
         :param max_irrigation_time: (s), maximum time that the pump is activated
         '''
+        
+        #uncomment this and remove the input variable in the function if does not work 
+        # gpio_pump = self.configs['gpio_pins'][1]['pin']
+        # gpio_sensor = self.configs['gpio_pins'][2]['pin']
+        # max_irrigation_time = self.configs['gpio_pins'][1]['on_time']
 
         for i in range(max_irrigation_time):
+            
+            #tempo massimo raggiunto
+            if i == max_irrigation_time -1:
+                self.logger.info("IDROPONICS: Maximum time reached. Turning OFF the pump")
+                self.gpios.output(gpio_pump, True)
+                break
 
             # not activation of the pump
             if self.gpios.input(gpio_sensor) == 0: 
-                self.logger.info('IDROPONICS: Water level high. Turning OFF the pump.')
-                self.gpios.output(gpio_pump, False)
-                
-                sleep(1)
+                self.logger.info('IDROPONICS: Water level high. pump OFF.')
+                self.gpios.output(gpio_pump, True)
+                break
 
             #activation of the pump
             else: 
                 self.gpios.output(gpio_pump, False) #turning on pump
-                self.logger.info('IDROPONICS: Water level low, turning ON the pump')
+                self.logger.info('IDROPONICS: Water level low, pump ON')
                 sleep(1)
 
     
