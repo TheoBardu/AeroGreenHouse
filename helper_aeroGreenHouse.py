@@ -183,20 +183,19 @@ class aeroHelper():
         :param max_irrigation_time: (s), maximum time that the pump is activated
         '''
 
-        
-        if self.gpios.input(gpio_sensor) == 0:
-            self.logger.info('IDROPONICS: Water level high')
-            #GPIO.cleanup()
-        else:
-            self.gpios.output(gpio_pump, False) #turning on pump
-            self.logger.info('IDROPONICS: Water level low, turning ON the pump')
+        for i in range(max_irrigation_time):
 
-            for i in range(max_irrigation_time):
-                if self.gpios.input(gpio_sensor) == 0:
-                    self.gpios.output(gpio_pump, True) #turning off pump
-                    self.logger.info('IDROPONICS: Water level high. Stopping the pump')
-                    #GPIO.cleanup()
-                    break
+            # not activation of the pump
+            if self.gpios.input(gpio_sensor) == 0: 
+                self.logger.info('IDROPONICS: Water level high. Turning OFF the pump.')
+                self.gpios.output(gpio_pump, False)
+                
+                sleep(1)
+
+            #activation of the pump
+            else: 
+                self.gpios.output(gpio_pump, False) #turning on pump
+                self.logger.info('IDROPONICS: Water level low, turning ON the pump')
                 sleep(1)
 
     
