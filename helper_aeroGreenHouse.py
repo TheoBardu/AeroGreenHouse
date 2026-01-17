@@ -3,6 +3,7 @@ import schedule
 from time import sleep
 import os
 import logging
+import RPi.GPIO as GPIO
 
 
 
@@ -125,7 +126,6 @@ class aeroHelper():
         
         :param config: configure file (config.yaml) with the pin listed
         '''
-        import RPi.GPIO as GPIO
         self.gpios = GPIO
         self.gpios.setmode(GPIO.BCM)
         self.gpios.setwarnings(False)
@@ -142,6 +142,7 @@ class aeroHelper():
         
         self.logger.info('Initialized GPIOs')
         #self.gpios.cleanup()
+
 
     def cleanup_gpios(self):
         self.gpios.cleanup()
