@@ -3,6 +3,7 @@ import schedule
 from time import sleep
 import os
 import logging
+from logging.handlers import TimedRotatingFileHandler
 
 import RPi.GPIO as GPIO
 
@@ -33,7 +34,13 @@ class aeroHelper():
             level=getattr(logging, self.configs["log"]["level"].upper(), logging.INFO),
             format="%(asctime)s [%(levelname)s] %(message)s",
             handlers=[
-                logging.FileHandler(os.path.join(log_dir, self.configs["log"]["filename"])),
+                TimedRotatingFileHandler(
+                    os.path.join(log_dir, self.configs["log"]["filename"]),
+                    when='midnight',
+                    interval=1,
+                    backupCount=7,
+                    suffix='.%Y-%m-%d'
+                ),
                 logging.StreamHandler()
             ]
         )

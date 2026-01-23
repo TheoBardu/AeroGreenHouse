@@ -9,7 +9,7 @@ dht22:
 
 log:
   directory: /home/fishnplants/Desktop/
-  filename: FnP_AeroGreenHouse.log
+  filename: FnP_AeroGreenHouse
   level: INFO
 
 config_reload_interval: 4
