@@ -693,6 +693,12 @@ class AeroGreenHouseGUI:
                     fid.write(format_data_out%(timestamp, temp, humidity, vpd))
                     fid.close()
 
+                    #carica file online
+                    try:
+                        self.ah.upload_data_on_web(temp, humidity, vpd, timestamp)
+                    except:
+                        self.ah.logger(f"AMBIENT: not able to upload the ambient data online. Check errors if occured")
+
 
                     # Attendi l'intervallo
                     time.sleep(interval)

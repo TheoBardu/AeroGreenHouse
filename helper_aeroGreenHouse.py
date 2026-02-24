@@ -294,5 +294,11 @@ class aeroHelper():
 
 
 
-
-
+    ###########################################
+    # Uploading data on website
+    ###########################################
+    def upload_data_on_web(self,T,H,vpd,tiimestamp):
+        '''
+        This module upload the data on website calling the local uploader.py module
+        '''
+        os.system(f'python uploader.py -t {T} -hu {H} -vpd {vpd} -ts {tiimestamp}')
