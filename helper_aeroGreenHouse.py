@@ -79,6 +79,10 @@ class aeroHelper():
         job_thread.start()
 
 
+    ###########################################
+    # Activation of GPIOs
+    ###########################################
+
     def activate_aeroponics(self):
         '''
         Function that activate the AEROPONICS controller system
@@ -120,12 +124,94 @@ class aeroHelper():
         else:
             self.logger.info('IDROPONICS system control ## DEACTIVATED ##')
 
+    def on_off_general(self, gpio, on_period, off_period, name):
+        '''
+        General function for activating and deactivating a GPIO pin
+        with configurable on/off periods. Integrates runner() and 
+        activate_aeroponics() scheduling logic in a single function.
+
+        Parameters are read from config.yaml for the entry matching <name>.
+        The passed arguments (gpio, on_period, off_period) are used as fallback
+        if the config entry is not found.
+
+        :param gpio:       GPIO pin number (BCM numbering)
+        :param on_period:  (s)   time the GPIO stays ON (replaces irrigation_time)
+        :param off_period: (min) interval between activations – i.e. OFF period
+        :param name:       name of the process; must match a 'name' field under
+                        gpio_pins in config.yaml
+        '''
+
+        # --- 1. Read parameters from config.yaml for the matching name ----------
+        job_config = next(
+            (j for j in self.configs['gpio_pins'] if j.get('name') == name),
+            None
+        )
+
+        if job_config is not None:
+            gpio       = job_config.get('pin',      gpio)
+            on_period  = job_config.get('on_time',  on_period)
+            off_period = job_config.get('interval', off_period)  # 'interval' = off_period in config
+        else:
+            self.logger.warning(
+                f'ON_OFF_GENERAL [{name}]: no matching entry in config.yaml – '
+                f'using passed arguments (gpio={gpio}, on_period={on_period}s, '
+                f'off_period={off_period}min)'
+            )
+
+        # --- 2. Initialise per-job active flag (shared dict on the instance) ----
+        if not hasattr(self, 'general_jobs_active'):
+            self.general_jobs_active = {}
+
+        self.general_jobs_active[name] = True
+        self.logger.info(f'{name} system control ## ACTIVATED ## '
+                        f'(gpio={gpio}, on={on_period}s, off={off_period}min)')
+
+        # --- 3. Inner pulse function (mirrors pump_aerophonics logic) -----------
+        def _pulse():
+            self.gpios.output(gpio, False)          # relay ON  (active-low board)
+            self.logger.info(f'{name}: GPIO {gpio} ON')
+
+            for i in range(on_period):
+                if i == on_period - 1:
+                    self.gpios.output(gpio, True)   # relay OFF
+                    self.logger.info(f'{name}: GPIO {gpio} OFF')
+                    break
+                sleep(1)
+
+        # --- 4. Dedicated scheduler (mirrors activate_aeroponics pattern) -------
+        job_schedule = schedule.Scheduler()
+        job_schedule.every(off_period).minutes.do(
+            self.runner, job=_pulse          # runner() launches _pulse in a thread
+        )
+
+        # --- 5. Blocking loop – exits when deactivate_general(name) is called ---
+        while self.general_jobs_active.get(name, False):
+            job_schedule.run_pending()
+            sleep(1)
+
+        self.logger.info(f'{name} system control ## DEACTIVATED ##')
+
+
+    ###########################################
+    # Deactivation of GPIOs
+    ###########################################
 
     def deactivate_aeroponics(self):
         self.aeroponics_job_active = False
     
     def deactivate_idroponics(self):
         self.idroponics_job_active = False
+
+    def deactivate_general(self, name):
+        '''
+        Stops the on_off_general loop for the job identified by <name>.
+
+        :param name: name of the process to deactivate
+        '''
+        if hasattr(self, 'general_jobs_active'):
+            self.general_jobs_active[name] = False
+
+    
 
 
     ###########################################

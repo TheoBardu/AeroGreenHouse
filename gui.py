@@ -418,7 +418,7 @@ class AeroGreenHouseGUI:
 
 
 
-    
+    # JOB Activation
     def toggle_job_on(self):
         """Attiva il job selezionato in un thread separato"""
         selected = self.jobs_tree.selection()
@@ -468,17 +468,32 @@ class AeroGreenHouseGUI:
             self.active_jobs[name] = 'Attivo'
 
         else:
-            messagebox.showwarning("Avviso", f"Job '{name}' non riconosciuto per l'attivazione.")
-            return
+            # Job generico – usa on_off_general
+            if self.ah.general_jobs_active.get(name, False):
+                messagebox.showwarning("Avviso", f"Il job {name} è già in esecuzione!")
+                return
+
+            # Inizializza il flag prima di lanciare il thread
+            if not hasattr(self.ah, 'general_jobs_active'):
+                self.ah.general_jobs_active = {}
+            self.ah.general_jobs_active[name] = True
+
+            job_thread = threading.Thread(
+                target=self.ah.on_off_general,
+                kwargs=dict(gpio=pin, on_period=on_time, off_period=interval, name=name),
+                daemon=True
+            )
+            job_thread.start()
+            self.active_jobs[name] = 'Attivo'
     
         
         # Update UI
         self.refresh_jobs_list()
         # messagebox.showinfo("Successo", f"Job '{name}' attivato!")
 
-    
+    # JOB deactivation
     def toggle_job_off(self):
-        """Disattiva il job selezionato"""
+        """Deactivate the selected job"""
         selected = self.jobs_tree.selection()
         if not selected:
             messagebox.showwarning("Avviso", "Selezionare un job da disattivare")
@@ -498,8 +513,9 @@ class AeroGreenHouseGUI:
             sleep(2)
             self.active_jobs[name] = 'Inattivo'
         else:
-            messagebox.showwarning("Avviso", f"Job '{name}' non riconosciuto per la disattivazione.")
-            return
+            self.ah.deactivate_general(name)
+            sleep(2)
+            self.active_jobs[name] = 'Inattivo'
         
         # Update UI
 
