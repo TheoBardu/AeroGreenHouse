@@ -5,29 +5,5 @@
 # Variabili d'ambiente - NON caricare mai su GitHub
 .env
 
-# Cache Python
-__pycache__/
-*.py[cod]
-*.pyo
 
-# # Dati sensori locali
-# *.txt
-# *.json
-# !.env.example
 
-# Plot e immagini generate
-plot.png
-image.jpg
-
-# Log
-*.log
-logs/
-
-# Virtual environment
-venv/
-.venv/
-env/
-
-# OS
-.DS_Store
-Thumbs.db
