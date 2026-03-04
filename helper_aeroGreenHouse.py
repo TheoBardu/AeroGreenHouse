@@ -387,4 +387,4 @@ class aeroHelper():
         '''
         This module upload the data on website calling the local uploader.py module
         '''
-        os.system(f'python uploader.py -t {T} -hu {H} -vpd {vpd} -ts {tiimestamp}')
+        os.system(f'python uploader/uploader.py data -t {T} -hu {H} -vpd {vpd} -ts {tiimestamp}')

@@ -365,5 +365,6 @@ if __name__ == "__main__":
             timestamp=args.timestamp
         )
         upload_averages()
+        upload_plot()
     elif args.command == 'plot':
         upload_plot()

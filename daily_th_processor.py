@@ -177,7 +177,7 @@ def generate_plot(df: pd.DataFrame, output_dir: str, date_label: str):
         ax.tick_params(axis='x', rotation=45)
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=250, bbox_inches='tight')
     plt.close(fig)
 
     logger.info(f"Plot salvato in: {output_path}")
