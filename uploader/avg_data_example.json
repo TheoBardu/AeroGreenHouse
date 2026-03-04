@@ -1,0 +1,12 @@
+{
+  "avg_temperature": 12.2,
+  "avg_humidity": 66.6,
+  "avg_vpd": 0.222,
+  "max_T": 33,
+  "min_T": 8,
+  "max_H": 99,
+  "min_H" : 44,
+  "max_VPD": 1.6,
+  "min_VPD": 0.222,
+  "timestamp": "2022/02/02 12:12:12"
+}

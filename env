@@ -1,0 +1,15 @@
+# ============================================================
+# FnP - AeroGreenHouse | Variabili d'ambiente
+# !! NON caricare questo file su GitHub !!
+# ============================================================
+
+# GitHub
+GITHUB_TOKEN=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
+GITHUB_USR=fishnplants
+GITHUB_REPO=AeroGreenHouse
+GITHUB_BRANCH=main
+
+# Paths
+TH_DATA_DIR=/home/fishnplants/Desktop/data/TH/
+PLOT_OUTPUT_DIR=/home/fishnplants/Desktop/data/PLOT/
+IMG_DIR=/home/fishnplants/Desktop/data/IMG/
