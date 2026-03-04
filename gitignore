@@ -1,9 +1,0 @@
-# ============================================================
-# FnP - AeroGreenHouse | .gitignore
-# ============================================================
-
-# Variabili d'ambiente - NON caricare mai su GitHub
-.env
-
-
-
