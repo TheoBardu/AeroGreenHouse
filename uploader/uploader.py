@@ -115,6 +115,7 @@ def upload_image():
     put_response.raise_for_status()
 
     print("✅ Image file aggiornato correttamente su GitHub")
+    #qui metterò la parte di gdrive
 
 
 def upload_plot():
