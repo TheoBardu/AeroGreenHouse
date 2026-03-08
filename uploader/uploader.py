@@ -115,7 +115,6 @@ def upload_image():
     put_response.raise_for_status()
 
     print("✅ Image file aggiornato correttamente su GitHub")
-    #qui metterò la parte di gdrive
 
 
 def upload_plot():
@@ -153,7 +152,7 @@ def upload_plot():
     print("✅ Plot file aggiornato correttamente su GitHub")
 
 
-def write_json(temperature, humidity, vpd, timestamp = datetime.now().strftime("%Y-%m-%d %H:%M"), filename=NAME_DATA):
+def write_json(temperature, humidity, vpd, timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S"), filename=NAME_DATA):
     payload = {
         "temperature": round(temperature, 2),
         "humidity": round(humidity, 2),

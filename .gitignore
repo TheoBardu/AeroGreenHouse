@@ -13,7 +13,7 @@ __pycache__/
 # Dati sensori locali
 *.txt
 *.json
-!.env.example
+.env.example
 
 # Plot e immagini generate
 plot.png
