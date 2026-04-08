@@ -363,20 +363,25 @@ class aeroHelper():
     # Irrigation time modifier for Aerophonics
     ###########################################
 
-    def T_modifier(self,T):
+    def T_modifier(self, T: float, t_old: float):
         '''
         Funzione per modificare il tempo di irrigazione in base alla temperatura settata
         
-        
-        :param T: Temperatura rilevata
+        INPUT:
+            T =  Temperatura rilevata in °C
+            t_old = vecchio tempo di attesa tra le irrigazioni (in minuti)
+
+        OUTPUT:
+            t_new: nuovo tempo di sospensione tra le irrigazioni (in minuti)
         '''
 
         from math import exp
         Topt = self.configs['T_var']['Topt']
         a = -0.2
         amp = 1
-        f = amp/(exp(a* (T - Topt)) + 1 ) - amp/2
-        return f
+        t_modifier = amp/(exp(a* (T - Topt)) + 1 ) - amp/2 #time modifier
+        t_new = t_new - t_new * t_modifier #new time separation
+        return t_new
 
 
 
