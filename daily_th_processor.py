@@ -27,6 +27,8 @@ import pandas as pd
 from time import sleep
 from datetime import datetime, timedelta
 
+WHEN = "00:01"
+NAME_FORMAT = "TH_%Y_%m_%d.txt"
 
 # ============================================================
 # CONFIGURAZIONE - modifica queste variabili secondo necessità
@@ -69,7 +71,7 @@ def get_yesterday_filename(data_dir: str) -> str:
     Reference: struttura naming file TH - Fish and Plants notes.pdf
     """
     yesterday = datetime.now() - timedelta(days=1)
-    filename = yesterday.strftime("TH%Y_%m_%d.txt")
+    filename = yesterday.strftime(NAME_FORMAT)
     return os.path.join(data_dir, filename), yesterday
 
 
@@ -274,11 +276,11 @@ def daily_job():
 # ============================================================
 
 if __name__ == "__main__":
-    logger.info("FnP Daily TH Processor avviato - job schedulato alle 00:01")
+    logger.info(f"FnP Daily TH Processor avviato - job schedulato alle {WHEN}")
 
     # Schedula il job ogni giorno alle 00:01
     # Reference: schedule library - main.py (FnP AeroGreenHouse repository)
-    schedule.every().day.at("00:01").do(daily_job)
+    schedule.every().day.at(WHEN).do(daily_job)
 
     # Opzione: esecuzione immediata per test (decommenta la riga seguente)
     # daily_job()

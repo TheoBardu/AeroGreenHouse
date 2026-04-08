@@ -1,30 +1,26 @@
 T_var:
   Topt: 18.0
-
 dht22:
-  pin: 23
-  read_interval: 5
-  save : True
-  saving_dir : /home/fishnplants/Desktop/data/TH/
-
+  pin: 27
+  read_interval: 600
+  save: true
+  saving_dir: /home/fishnplants/Desktop/data/TH/
 log:
   directory: /home/fishnplants/Desktop/
   filename: FnP_AeroGreenHouse
   level: INFO
-
 config_reload_interval: 4
-
 gpio_pins:
 - name: AEROPONICS
-  pin: 15
+  pin: 19
   what_type: pump
-  interval: 8
-  on_time: 3
+  interval: 10
+  on_time: 15
 - name: IDROPONICS
-  pin: 27
+  pin: 12
   what_type: pump
-  interval: 2
-  on_time: 5
+  interval: 29
+  on_time: 65
 - name: MOISTURE
-  pin: 13
+  pin: 26
   what_type: sensor

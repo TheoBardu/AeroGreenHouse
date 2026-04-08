@@ -34,13 +34,7 @@ class aeroHelper():
             level=getattr(logging, self.configs["log"]["level"].upper(), logging.INFO),
             format="%(asctime)s [%(levelname)s] %(message)s",
             handlers=[
-                TimedRotatingFileHandler(
-                    os.path.join(log_dir, self.configs["log"]["filename"]),
-                    when='midnight',
-                    interval=1,
-                    backupCount=7,
-                    suffix='.%Y-%m-%d'
-                ),
+                logging.FileHandler(os.path.join(log_dir, self.configs["log"]["filename"])),
                 logging.StreamHandler()
             ]
         )
@@ -388,13 +382,8 @@ class aeroHelper():
     ###########################################
     # Uploading data on website
     ###########################################
-    def upload_data_on_web(self,T,H,vpd,tiimestamp):
+    def upload_data_on_web(self,T,H,vpd,timestamp):
         '''
         This module upload the data on website calling the local uploader.py module
         '''
-        os.system(f'python uploader/uploader.py data -t {T} -hu {H} -vpd {vpd} -ts {tiimestamp}')
-
-    def upload_on_googleDrive(self,data):
-        '''
-        This function upload the TH data on google drive
-        '''
+        os.system(f'python uploader/uploader.py data -t {T} -hu {H} -vpd {vpd} -ts "{timestamp}"')

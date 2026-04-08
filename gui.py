@@ -1,3 +1,4 @@
+#! /usr/bin/python3
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import yaml
@@ -11,6 +12,8 @@ import threading
 from time import sleep
 import logging
 from queue import Queue
+import adafruit_dht
+import board
 
 
 class GUILoggingHandler(logging.Handler):
@@ -682,11 +685,28 @@ class AeroGreenHouseGUI:
             pin = self.config.get('dht22', {}).get('pin', 27)
             
             self.ah.logger.info(f"Inizio lettura AMBIENT. Intervallo: {interval}s, Pin: {pin}")
+            dht = eval(f"adafruit_dht.DHT22(board.D{pin})")
+            
+            def measure_dht_22(dht):
+                while True:
+                    try:
+                        T = dht.temperature
+                        H = dht.humidity
+                        #print('T = %4.2f °C ;  H = %4.2f'%(T, H),'%', 'VPD = %5.4f kPa'%(self.VPD(T,H))) #For debug
+                        return T,H
+                        break
+                    except RuntimeError as error:
+                        print(error.args[0])
+                        sleep(2.0)
+                        continue
+                    except Exception as error:
+                        dht.exit()
+                        raise error
             
             while not self.ambient_stop_flag:
                 try:
                     # Leggi i dati
-                    temp, humidity = self.ah.measure_dht22(pin)
+                    temp, humidity = measure_dht_22(dht)
                     vpd = self.ah.VPD(temp, humidity)
 
                     
