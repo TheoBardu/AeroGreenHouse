@@ -31,6 +31,7 @@ NAME_DATA = "dati.json"
 NAME_DATA_AVG = "avg_data.json"
 NAME_IMG = "image.jpg"
 NAME_PLOT = "plot.png"
+TIMEOUT = 50 #timeout seconds
 
 img_location = "/home/fishnplants/Desktop/data/IMG/"
 plot_location = "/home/fishnplants/Desktop/data/PLOT/"
@@ -111,7 +112,7 @@ def upload_image():
         "branch": BRANCH
     }
 
-    put_response = requests.put(url_data, headers=headers, json=payload)
+    put_response = requests.put(url_data, headers=headers, json=payload, timeout=TIMEOUT)
     put_response.raise_for_status()
 
     print("✅ Image file aggiornato correttamente su GitHub")
@@ -146,7 +147,7 @@ def upload_plot():
         "branch": BRANCH
     }
 
-    put_response = requests.put(url_data, headers=headers, json=payload)
+    put_response = requests.put(url_data, headers=headers, json=payload, timeout=TIMEOUT)
     put_response.raise_for_status()
 
     print("✅ Plot file aggiornato correttamente su GitHub")
@@ -230,7 +231,7 @@ def upload_averages():
         "branch": BRANCH
     }
 
-    put_response = requests.put(url_data, headers=headers, json=payload)
+    put_response = requests.put(url_data, headers=headers, json=payload, timeout=TIMEOUT)
     put_response.raise_for_status()
 
     print("✅ File JSON medi aggiornato correttamente su GitHub")
