@@ -20,6 +20,7 @@ import argparse
 from datetime import datetime
 import sys
 import os
+import time
 from dotenv import load_dotenv
 
 
@@ -43,6 +44,29 @@ USR = os.getenv("GITHUB_USR")
 REPO = os.getenv("GITHUB_REPO")
 BRANCH = os.getenv("GITHUB_BRANCH")
 
+# ===== RETRY CONFIG =====
+MAX_RETRIES = 3  # 3 tentativi totali = 2 retry
+BASE_DELAY = 1   # delay iniziale in secondi
+
+def retry_with_exponential_backoff(func):
+    """
+    Decoratore che aggiunge retry con backoff esponenziale.
+    Max 3 tentativi totali con delay esponenziale (1s, 2s, 4s).
+    """
+    def wrapper(*args, **kwargs):
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if attempt == MAX_RETRIES:
+                    print(f"❌ Errore dopo {attempt} tentativi: {str(e)}")
+                    raise
+                delay = BASE_DELAY ** (attempt - 1)  # 1s, 2s, 4s
+                print(f"⚠️  Tentativo {attempt} fallito. Retry in {delay}s... ({str(e)})")
+                time.sleep(delay)
+    return wrapper
+
+@retry_with_exponential_backoff
 def upload_json():
     """
     Upload the JSON data to GitHub
@@ -81,6 +105,7 @@ def upload_json():
 
     print("✅ File JSON aggiornato correttamente su GitHub")
 
+@retry_with_exponential_backoff
 def upload_image():
     """
     Upload the image captured to GitHub
@@ -118,6 +143,7 @@ def upload_image():
     print("✅ Image file aggiornato correttamente su GitHub")
 
 
+@retry_with_exponential_backoff
 def upload_plot():
     """
     Upload the plot captured to GitHub
@@ -198,6 +224,7 @@ def create_json(temperature, humidity, vpd, timestamp):
         timestamp=timestamp
     )
 
+@retry_with_exponential_backoff
 def upload_averages():
     """
     Upload the averaged JSON data to GitHub
