@@ -24,3 +24,9 @@ gpio_pins:
 - name: MOISTURE
   pin: 26
   what_type: sensor
+ir_control:
+  rx_pin : 24
+  tx_pin : 17
+  remote_file: /home/fishnplants/Desktop/ac_remote.json
+  default_temp: 22    # Temperatura di default climatizzatore
+  enabled: true

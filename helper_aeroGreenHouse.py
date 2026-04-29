@@ -43,11 +43,30 @@ class aeroHelper():
         self.logger.info('#### Started FnP AeroSystems ###')
 
         self.initialize_gpio(self.configs)
+        
+        # IR module pins activation
+        self.ir_controller = None
+        if self.configs.get('ir_control', {}).get('enabled', False):
+            from ir_controller import IRController
+            ir_cfg = self.configs['ir_control']
+            try:
+                self.ir_controller = IRController(
+                    tx_pin=ir_cfg['tx_pin'],
+                    rx_pin=ir_cfg['rx_pin'],
+                    remote_file=ir_cfg['remote_file']
+                )
+                self.logger.info("IR Controller caricato con successo")
+            except Exception as e:
+                self.logger.warning(f"IR Controller non disponibile: {e}")
 
-
+        
         #GPIO jobs controll
         self.aeroponics_job_active = False # controlla se viene eseguito il job aeroponics
         self.idroponics_job_active = False # controlla se viene eseguito il job idroponics
+
+        # Last DHT22 reading
+        self.last_T = None   
+        self.last_H = None   
         
         # TH jobs controll
         self.th_job_active = False #controlla se viene eseguita la lettura dei dati TH

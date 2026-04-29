@@ -140,6 +140,11 @@ class AeroGreenHouseGUI:
         ambient_frame = ttk.Frame(notebook)
         notebook.add(ambient_frame, text="Ambient")
         self.create_ambient_tab(ambient_frame)
+
+        # Tab 5: IR controller
+        ir_frame = ttk.Frame(notebook)
+        notebook.add(ir_frame, text="Climatizzatore")
+        self.create_ir_tab(ir_frame)
         
     def create_config_tab(self, parent):
         """Tab per modificare la configurazione"""
@@ -710,6 +715,11 @@ class AeroGreenHouseGUI:
                     vpd = self.ah.VPD(temp, humidity)
 
                     
+                    self.ah.last_T = temp
+                    self.ah.last_H = humidity
+                    
+
+                    
                     # Ottieni timestamp
                     timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     file_name = datetime.now().strftime("%Y_%m_%d")
@@ -819,7 +829,284 @@ class AeroGreenHouseGUI:
                 
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile aprire il file: {str(e)}")
-    
+
+# IR function controller =============
+    def create_ir_tab(self, parent):
+        """Tab per il controllo IR del climatizzatore con loop di controllo automatico."""
+
+        # ── Stato sistema di controllo ──────────────────────────────────────────
+        sys_frame = ttk.LabelFrame(parent, text="Sistema di Controllo AC", padding=12)
+        sys_frame.pack(fill=tk.X, padx=10, pady=8)
+
+        indicator_row = ttk.Frame(sys_frame)
+        indicator_row.pack(fill=tk.X)
+
+        ttk.Label(indicator_row, text="Stato controllo:", font=('Arial', 12)).pack(side=tk.LEFT)
+
+        # Indicatore ATTIVO / DISATTIVO
+        self.ac_control_status_label = tk.Label(
+            indicator_row,
+            text="  DISATTIVO  ",
+            font=('Arial', 12, 'bold'),
+            bg='#d9534f', fg='white',
+            relief='flat', padx=6, pady=2
+        )
+        self.ac_control_status_label.pack(side=tk.LEFT, padx=10)
+
+        self.ac_toggle_btn = ttk.Button(
+            indicator_row,
+            text="▶  Attiva Controllo",
+            command=self.toggle_ac_control
+        )
+        self.ac_toggle_btn.pack(side=tk.LEFT, padx=5)
+
+        # ── Impostazioni controllo ───────────────────────────────────────────────
+        cfg_frame = ttk.LabelFrame(parent, text="Impostazioni Controllo", padding=12)
+        cfg_frame.pack(fill=tk.X, padx=10, pady=6)
+
+        # Riga 0 — Comando ON
+        ttk.Label(cfg_frame, text="Comando AC da inviare:").grid(
+            row=0, column=0, sticky=tk.W, pady=4)
+        self.ac_cmd_on_var = tk.StringVar(value="accendi")
+        ttk.Entry(cfg_frame, textvariable=self.ac_cmd_on_var, width=20).grid(
+            row=0, column=1, sticky=tk.W, padx=8)
+        ttk.Label(cfg_frame, text="(nome registrato nel file JSON remoto)",
+                foreground='gray').grid(row=0, column=2, sticky=tk.W)
+
+        # Riga 1 — Intervallo
+        ttk.Label(cfg_frame, text="Intervallo controllo (min):").grid(
+            row=1, column=0, sticky=tk.W, pady=4)
+        self.ac_interval_var = tk.StringVar(value="5")
+        ttk.Entry(cfg_frame, textvariable=self.ac_interval_var, width=8).grid(
+            row=1, column=1, sticky=tk.W, padx=8)
+
+        # Riga 2 — Topt in sola lettura (da config.yaml)
+        topt_val = self.config.get('T_var', {}).get('Topt', 18.0)
+        ttk.Label(cfg_frame, text="Soglia temperatura Topt:").grid(
+            row=2, column=0, sticky=tk.W, pady=4)
+        ttk.Label(cfg_frame, text=f"{topt_val} °C  (da config.yaml → T_var.Topt)",
+                foreground='gray').grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=8)
+
+        # ── Stato dispositivo climatizzatore ────────────────────────────────────
+        dev_frame = ttk.LabelFrame(parent, text="Stato Dispositivo", padding=12)
+        dev_frame.pack(fill=tk.X, padx=10, pady=6)
+
+        dev_row = ttk.Frame(dev_frame)
+        dev_row.pack(fill=tk.X)
+        ttk.Label(dev_row, text="Climatizzatore:", font=('Arial', 12)).pack(side=tk.LEFT)
+        self.ac_status_label = ttk.Label(
+            dev_row, text="⚫  Spento", font=('Arial', 13, 'bold'))
+        self.ac_status_label.pack(side=tk.LEFT, padx=10)
+
+        # Ultima lettura usata dal controllo
+        self.ac_last_read_label = ttk.Label(
+            dev_frame,
+            text="Ultima T usata: --  |  Ultima H usata: --  |  Topt: --",
+            font=('Arial', 10), foreground='gray'
+        )
+        self.ac_last_read_label.pack(anchor=tk.W, pady=(6, 0))
+
+        # ── Controlli manuali ───────────────────────────────────────────────────
+        manual_frame = ttk.LabelFrame(parent, text="Controllo Manuale", padding=10)
+        manual_frame.pack(fill=tk.X, padx=10, pady=6)
+
+        ttk.Button(manual_frame, text="🟢  Accendi",
+                command=lambda: self.send_ir_command('accendi')).pack(side=tk.LEFT, padx=5)
+        ttk.Button(manual_frame, text="🔴  Spegni",
+                command=lambda: self.send_ir_command('spegni')).pack(side=tk.LEFT, padx=5)
+        ttk.Button(manual_frame, text="🔼  Temp +",
+                command=lambda: self.send_ir_command('temp_up')).pack(side=tk.LEFT, padx=5)
+        ttk.Button(manual_frame, text="🔽  Temp -",
+                command=lambda: self.send_ir_command('temp_down')).pack(side=tk.LEFT, padx=5)
+
+        # ── Registrazione comandi ───────────────────────────────────────────────
+        rec_frame = ttk.LabelFrame(parent, text="Registra Nuovo Comando", padding=10)
+        rec_frame.pack(fill=tk.X, padx=10, pady=6)
+
+        ttk.Label(rec_frame, text="Nome comando:").grid(row=0, column=0, sticky=tk.W)
+        self.ir_cmd_name_var = tk.StringVar()
+        ttk.Entry(rec_frame, textvariable=self.ir_cmd_name_var, width=20).grid(
+            row=0, column=1, padx=5)
+        ttk.Button(rec_frame, text="⏺  Registra",
+                command=self.record_ir_command).grid(row=0, column=2, padx=5)
+
+        ttk.Label(
+            rec_frame,
+            text="Avvicina il telecomando al ricevitore VS1838B, poi premi Registra.",
+            foreground='gray'
+        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(4, 0))
+
+
+    def toggle_ac_control(self):
+        """Attiva o disattiva il loop di controllo automatico AC."""
+        if not self.ac_control_active:
+            # Validazione input
+            try:
+                interval = float(self.ac_interval_var.get())
+                if interval <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Errore",
+                    "Inserire un intervallo valido (numero > 0) in minuti.")
+                return
+
+            cmd = self.ac_cmd_on_var.get().strip()
+            if not cmd:
+                messagebox.showerror("Errore",
+                    "Inserire il nome del comando da inviare al climatizzatore.")
+                return
+
+            if self.ah.ir_controller is None:
+                messagebox.showwarning("Avviso",
+                    "IR Controller non inizializzato.\n"
+                    "Verifica la sezione ir_control in config.yaml e che pigpiod sia attivo.")
+                return
+
+            # Verifica che ci sia già una lettura DHT22 disponibile
+            if self.ah.last_T is None:
+                messagebox.showwarning("Avviso",
+                    "Nessuna lettura DHT22 disponibile.\n"
+                    "Avvia prima la lettura Ambient dal tab 'Ambient' e attendi almeno un ciclo.")
+                return
+
+            # Avvio
+            self.ac_control_active = True
+            self.ac_control_thread = threading.Thread(
+                target=self.ac_control_loop, daemon=True)
+            self.ac_control_thread.start()
+
+            self.ac_control_status_label.config(text="  ATTIVO  ", bg='#5cb85c')
+            self.ac_toggle_btn.config(text="⏹  Disattiva Controllo")
+            self.ah.logger.info(
+                f"AC Control: avviato. Comando='{cmd}', "
+                f"Intervallo={interval} min, "
+                f"Topt={self.config.get('T_var', {}).get('Topt', 18.0)}°C"
+            )
+
+        else:
+            # Stop
+            self.ac_control_active = False
+            self.ac_control_status_label.config(text="  DISATTIVO  ", bg='#d9534f')
+            self.ac_toggle_btn.config(text="▶  Attiva Controllo")
+            self.ah.logger.info("AC Control: disattivato dall'utente.")
+
+
+    def ac_control_loop(self):
+        """
+        Loop di controllo automatico AC.
+        - Legge self.ah.last_T e self.ah.last_H (aggiornate dal loop ambient)
+        - Confronta T con Topt dal config.yaml
+        - Se T > Topt invia il comando IR configurato dall'utente
+        - Attende n minuti prima del prossimo controllo
+        """
+        while self.ac_control_active:
+            try:
+                # Rilegge Topt dal config (può essere cambiata nel tab Configurazione)
+                Topt = self.config.get('T_var', {}).get('Topt', 18.0)
+                cmd  = self.ac_cmd_on_var.get().strip()
+                interval_min = float(self.ac_interval_var.get())
+
+                T = self.ah.last_T
+                H = self.ah.last_H
+
+                if T is None or H is None:
+                    self.ah.logger.warning(
+                        "AC Control: lettura DHT22 non ancora disponibile, "
+                        "attendo il prossimo ciclo."
+                    )
+                else:
+                    # Aggiorna etichetta informativa nella GUI (thread-safe via after)
+                    info_txt = (
+                        f"Ultima T usata: {T:.1f} °C  |  "
+                        f"Ultima H usata: {H:.1f} %  |  "
+                        f"Topt: {Topt} °C"
+                    )
+                    self.root.after(0, lambda t=info_txt:
+                        self.ac_last_read_label.config(text=t))
+
+                    if T > Topt:
+                        self.ah.logger.info(
+                            f"AC Control: T={T:.1f}°C > Topt={Topt}°C "
+                            f"→ invio comando '{cmd}'"
+                        )
+                        success = self.ah.ir_controller.send_command(cmd)
+                        if success:
+                            self.root.after(0, lambda:
+                                self.ac_status_label.config(text="🟢  Acceso"))
+                        else:
+                            self.ah.logger.error(
+                                f"AC Control: invio comando '{cmd}' fallito.")
+                    else:
+                        self.ah.logger.info(
+                            f"AC Control: T={T:.1f}°C ≤ Topt={Topt}°C "
+                            f"→ nessuna azione"
+                        )
+
+            except Exception as e:
+                self.ah.logger.error(f"AC Control: errore nel ciclo di controllo: {e}")
+
+            # Attesa con granularità 1s per rispondere allo stop
+            seconds_to_wait = int(float(self.ac_interval_var.get()) * 60)
+            for _ in range(seconds_to_wait):
+                if not self.ac_control_active:
+                    break
+                sleep(1)
+
+        self.ah.logger.info("AC Control: loop terminato.")
+
+
+    def send_ir_command(self, cmd: str):
+        """Invia comando IR manuale al climatizzatore."""
+        if self.ah.ir_controller is None:
+            messagebox.showwarning(
+                "Avviso",
+                "IR Controller non inizializzato.\n"
+                "Verifica config.yaml e che pigpiod sia attivo."
+            )
+            return
+
+        result = self.ah.ir_controller.send_command(cmd)
+        if result:
+            if cmd == 'accendi':
+                self.ac_status_label.config(text="🟢  Acceso")
+            elif cmd == 'spegni':
+                self.ac_status_label.config(text="⚫  Spento")
+            self.ah.logger.info(f"AC Control (manuale): comando '{cmd}' inviato.")
+        else:
+            messagebox.showerror("Errore", f"Impossibile inviare il comando '{cmd}'.")
+
+
+    def record_ir_command(self):
+        """Registra un nuovo comando IR dal telecomando fisico."""
+        if self.ah.ir_controller is None:
+            messagebox.showwarning("Avviso", "IR Controller non inizializzato.")
+            return
+
+        name = self.ir_cmd_name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Avviso", "Inserire un nome per il comando.")
+            return
+
+        messagebox.showinfo(
+            "Registrazione",
+            f"Premi il tasto '{name}' sul telecomando del climatizzatore\n"
+            f"entro 10 secondi, puntandolo verso il ricevitore VS1838B."
+        )
+
+        def _record():
+            success = self.ah.ir_controller.record_command(name)
+            if success:
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Successo", f"Comando '{name}' registrato correttamente."))
+            else:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Errore", f"Registrazione del comando '{name}' fallita.\n"
+                            f"Verifica la connessione del ricevitore e riprova."))
+
+        threading.Thread(target=_record, daemon=True).start()
+# =================================================================
+
+
 if __name__ == "__main__":
     try:
         root = tk.Tk()
