@@ -1,5 +1,6 @@
 T_var:
   Topt: 18.0
+  Hopt: 65.0
 dht22:
   pin: 27
   read_interval: 600
@@ -27,6 +28,7 @@ gpio_pins:
 ir_control:
   rx_pin : 20
   tx_pin : 21
-  remote_file: /home/fishnplants/Desktop/ac_remote.json
+  file_ac_name: /home/fishnplants/Desktop/ac_remote.json
   default_temp: 22    # Temperatura di default climatizzatore
   enabled: true
+  time_max_on: 300 # Max on time for the Air conditioner

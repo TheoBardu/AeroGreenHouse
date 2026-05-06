@@ -250,9 +250,15 @@ class aeroHelper():
             self.gpios.setup(g["pin"], self.gpios.OUT)
             self.gpios.output(g["pin"], True) #Spengo tutti i pin inizialmente
             g_list.append(g["pin"])
-            
         
-        self.logger.info('Initialized GPIOs')
+        #initializing the Tx gpio pin for IR controller
+        ir_tx_pin = config.get("ir_control", {}).get("tx_pin")
+        if ir_tx_pin is not None:
+            self.gpios.setup(ir_tx_pin, self.gpios.OUT)
+            g_list.append(ir_tx_pin)
+            self.logger.info(f'IR TX pin {ir_tx_pin} initialized.')
+        
+        self.logger.info('GPIOs initialized')
         #self.gpios.cleanup()
 
 
