@@ -165,6 +165,10 @@ class AeroGreenHouseGUI:
         ttk.Label(t_frame, text="T_opt (°C):").grid(row=0, column=0, sticky=tk.W)
         self.t_opt_var = tk.StringVar(value=str(self.config.get('T_var', {}).get('Topt', 18)))
         ttk.Entry(t_frame, textvariable=self.t_opt_var, width=10).grid(row=0, column=1, sticky=tk.W)
+
+        ttk.Label(t_frame, text="H_opt (%):").grid(row=0, column=2, sticky=tk.W)
+        self.h_opt_var = tk.StringVar(value=str(self.config.get('T_var', {}).get('Hopt', 65)))
+        ttk.Entry(t_frame, textvariable=self.h_opt_var, width=10).grid(row=0, column=3, sticky=tk.W)
         
         # Frame per DHT22
         dht_frame = ttk.LabelFrame(parent, text="DHT22 Sensor", padding=10)
@@ -178,6 +182,27 @@ class AeroGreenHouseGUI:
         self.dht_interval_var = tk.StringVar(value=str(self.config.get('dht22', {}).get('read_interval', 5)))
         ttk.Entry(dht_frame, textvariable=self.dht_interval_var, width=10).grid(row=0, column=3, sticky=tk.W)
         
+        # Frame per IR Control
+        ir_frame = ttk.LabelFrame(parent, text="IR Control (Condizionatore)", padding=10)
+        ir_frame.pack(fill=tk.X, padx=10, pady=10)
+ 
+        ttk.Label(ir_frame, text="TX Pin GPIO:").grid(row=0, column=0, sticky=tk.W)
+        self.ir_tx_pin_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('tx_pin', 17)))
+        ttk.Entry(ir_frame, textvariable=self.ir_tx_pin_var, width=10).grid(row=0, column=1, sticky=tk.W)
+ 
+        ttk.Label(ir_frame, text="File Comandi AC:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
+        self.ir_file_var = tk.StringVar(value=self.config.get('ir_control', {}).get('file_ac_name', 'ac_controller.json'))
+        ttk.Entry(ir_frame, textvariable=self.ir_file_var, width=30).grid(row=0, column=3, sticky=tk.W)
+ 
+        ttk.Label(ir_frame, text="Tempo max accensione (min):").grid(row=1, column=0, sticky=tk.W)
+        self.ir_time_max_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('time_max_on', 30.0)))
+        ttk.Entry(ir_frame, textvariable=self.ir_time_max_var, width=10).grid(row=1, column=1, sticky=tk.W)
+
+        ttk.Label(ir_frame, text="Separazione controllo (min):").grid(row=1, column=2, sticky=tk.W)
+        self.ir_time_sep_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('control_time', 15)))
+        ttk.Entry(ir_frame, textvariable=self.ir_time_sep_var, width=10).grid(row=1, column=3, sticky=tk.W)
+
+
         # Frame per Log
         log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
         log_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -548,12 +573,19 @@ class AeroGreenHouseGUI:
         """Salva i cambiamenti della configurazione"""
         try:
             self.config['T_var']['Topt'] = float(self.t_opt_var.get())
+            self.config['T_var']['Hopt'] = float(self.h_opt_var.get())
             self.config['dht22']['pin'] = int(self.dht_pin_var.get())
             self.config['dht22']['read_interval'] = int(self.dht_interval_var.get())
             self.config['log']['directory'] = self.log_dir_var.get()
             self.config['log']['filename'] = self.log_file_var.get()
             self.config['log']['level'] = self.log_level_var.get()
             self.config['config_reload_interval'] = int(self.reload_interval_var.get())
+            self.config.setdefault('ir_control', {})
+            self.config['ir_control']['tx_pin'] = int(self.ir_tx_pin_var.get())
+            self.config['ir_control']['file_ac_name'] = self.ir_file_var.get()
+            self.config['ir_control']['time_max_on'] = float(self.ir_time_max_var.get())
+            self.config['ir_control']['control_time'] = float(self.ir_time_sep_var.get())
+            
             
             self.save_config()
         except ValueError:
@@ -563,12 +595,17 @@ class AeroGreenHouseGUI:
         """Ricarica la configurazione dalla tab"""
         self.config = self.load_config()
         self.t_opt_var.set(str(self.config.get('T_var', {}).get('Topt', 18)))
+        self.h_opt_var.set(str(self.config.get('T_var', {}).get('Hopt', 65)))
         self.dht_pin_var.set(str(self.config.get('dht22', {}).get('pin', 27)))
         self.dht_interval_var.set(str(self.config.get('dht22', {}).get('read_interval', 5)))
         self.log_dir_var.set(self.config.get('log', {}).get('directory', ''))
         self.log_file_var.set(self.config.get('log', {}).get('filename', ''))
         self.log_level_var.set(self.config.get('log', {}).get('level', 'INFO'))
         self.reload_interval_var.set(str(self.config.get('config_reload_interval', 4)))
+        self.ir_tx_pin_var.set(str(self.config.get('ir_control', {}).get('tx_pin', 21)))
+        self.ir_file_var.set(self.config.get('ir_control', {}).get('file_ac_name', 'ac_controller.json'))
+        self.ir_time_max_var.set(str(self.config.get('ir_control', {}).get('time_max_on', 30)))
+        self.ir_time_sep_var.set(str(self.config.get('ir_control', {}).get('control_time', 30)))
         messagebox.showinfo("Successo", "Configurazione ricaricata!")
     
     def update_log_file_label(self):
@@ -933,11 +970,11 @@ class AeroGreenHouseGUI:
         self.ah.logger.info("AC_CONTROL: Controllo automatico condizionatore ## ATTIVATO ##")
  
         def ac_control_loop():
-            interval = self.config.get('dht22', {}).get('read_interval', 5)
+            interval = self.config.get('ir_control', {}).get('control_time', 15)
             while not self.ac_control_stop_flag:
                 if self.ah.last_T is not None and self.ah.last_H is not None:
                     try:
-                        self.ir_controller.evaluate_and_send(self.last_temp, self.last_humidity)
+                        self.ir_controller.evaluate_and_send(self.ah.last_T, self.ah.last_H)
                         # Aggiorna etichetta ultimo comando nella GUI
                         last_cmd = self.ir_controller.last_command_sent or '--'
                         self.root.after(0, lambda cmd=last_cmd: self.ac_last_cmd_label.config(text=cmd))

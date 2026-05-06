@@ -32,3 +32,4 @@ ir_control:
   default_temp: 22    # Temperatura di default climatizzatore
   enabled: true
   time_max_on: 300 # Max on time for the Air conditioner
+  control_time: 2 #minutes separation for the control
