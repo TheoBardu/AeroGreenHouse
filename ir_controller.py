@@ -26,8 +26,8 @@ class IRController:
         self.time_max_on = float(config['ir_control'].get('time_max_on', 30.0))  # minuti
 
         # Parametri clima da T_var
-        self.Topt = float(config['T_var']['Topt'])
-        self.Hopt = float(config['T_var']['Hopt'])
+        self.Topt = float(config['ir_control']['T_max'])
+        self.Hopt = float(config['ir_control']['H_max'])
 
         # Stato interno del controller
         self.last_command_sent = None   # 'Tlow', 'Hlow', 'off' o None

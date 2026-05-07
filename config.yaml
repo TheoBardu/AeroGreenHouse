@@ -33,3 +33,5 @@ ir_control:
   enabled: true
   time_max_on: 300 # Max on time for the Air conditioner
   control_time: 2 #minutes separation for the control
+  T_max: 24.0
+  H_max: 65.0
