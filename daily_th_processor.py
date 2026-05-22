@@ -41,7 +41,7 @@ TH_DATA_DIR = "/home/fishnplants/Desktop/data/TH/"
 PLOT_OUTPUT_DIR = "/home/fishnplants/Desktop/data/PLOT/"
 
 # Path completo dello script uploader.py
-UPLOADER_SCRIPT = "/home/fishnplants/Desktop/uploader.py"
+UPLOADER_SCRIPT = "/home/fishnplants/Desktop/codes/python/upload_website/uploader.py"
 
 # Nome del file plot di output (deve coincidere con quello atteso da uploader.py)
 PLOT_FILENAME = "plot.png"
@@ -203,6 +203,12 @@ def call_uploader(stats: dict, timestamp_str: str):
         '-avgt',   str(stats['avg_temperature']),
         '-avgh',   str(stats['avg_humidity']),
         '-avgvpd', str(stats['avg_vpd']),
+        '-maxT', str(stats['max_T']),
+        '-maxH', str(stats['max_H']),
+        '-maxVPD', str(stats['max_VPD']),
+        '-minT', str(stats['min_T']),
+        '-minH', str(stats['min_H']),
+        '-minVPD', str(stats['min_VPD']),
         '-ts',     timestamp_str
     ]
     logger.info(f"Eseguo uploader averages: {' '.join(avg_cmd)}")
@@ -240,7 +246,7 @@ def daily_job():
         # 1. Path file giorno precedente
         filepath, yesterday = get_yesterday_filename(TH_DATA_DIR)
         date_label = yesterday.strftime("%Y-%m-%d")
-        timestamp_str = yesterday.strftime("%Y-%m-%d 00:01")
+        timestamp_str = yesterday.strftime("%Y-%m-%d")
 
         logger.info(f"Elaborazione file: {filepath}")
 
