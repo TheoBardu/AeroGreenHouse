@@ -759,6 +759,11 @@ class AeroGreenHouseGUI:
                 try:
                     # Leggi i dati
                     temp, humidity = measure_dht_22(dht)
+                    sleep(3)
+                    temp, humidity = measure_dht_22(dht)
+                    sleep(3)
+                    
+                    temp, humidity = measure_dht_22(dht)
                     vpd = self.ah.VPD(temp, humidity)
 
                     
