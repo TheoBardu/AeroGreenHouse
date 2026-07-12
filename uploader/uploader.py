@@ -44,6 +44,7 @@ USR = os.getenv("GITHUB_USR")
 REPO = os.getenv("GITHUB_REPO")
 BRANCH = os.getenv("GITHUB_BRANCH")
 
+
 # ===== RETRY CONFIG =====
 MAX_RETRIES = 3  # 3 tentativi totali = 2 retry
 BASE_DELAY = 1   # delay iniziale in secondi

@@ -47,7 +47,7 @@ class aeroHelper():
         # IR module pins activation
         self.ir_controller = None
         if self.configs.get('ir_control', {}).get('enabled', False):
-            from ir_controller import IRController
+            from ir_controller.ir_controller import IRController
             ir_cfg = self.configs['ir_control']
             try:
                 self.ir_controller = IRController(

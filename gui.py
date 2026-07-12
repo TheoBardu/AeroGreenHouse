@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 from helper_aeroGreenHouse import aeroHelper
-from ir_controller import IRController
+from ir_controller.ir_controller import IRController
 import schedule
 import threading
 from time import sleep
@@ -201,7 +201,15 @@ class AeroGreenHouseGUI:
         ttk.Label(ir_frame, text="Separazione controllo (min):").grid(row=1, column=2, sticky=tk.W)
         self.ir_time_sep_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('control_time', 15)))
         ttk.Entry(ir_frame, textvariable=self.ir_time_sep_var, width=10).grid(row=1, column=3, sticky=tk.W)
+        
+        
+        ttk.Label(ir_frame, text="Temp accensione (°C):").grid(row=2, column=0, sticky=tk.W)
+        self.ir_T_max_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('T_max', 25.0)))
+        ttk.Entry(ir_frame, textvariable=self.ir_T_max_var, width=10).grid(row=2, column=1, sticky=tk.W)
 
+        ttk.Label(ir_frame, text="RH accensione (%):").grid(row=2, column=2, sticky=tk.W)
+        self.ir_H_max_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('H_max', 65.0)))
+        ttk.Entry(ir_frame, textvariable=self.ir_H_max_var, width=10).grid(row=2, column=3, sticky=tk.W)
 
         # Frame per Log
         log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
@@ -585,6 +593,8 @@ class AeroGreenHouseGUI:
             self.config['ir_control']['file_ac_name'] = self.ir_file_var.get()
             self.config['ir_control']['time_max_on'] = float(self.ir_time_max_var.get())
             self.config['ir_control']['control_time'] = float(self.ir_time_sep_var.get())
+            self.config['ir_control']['T_max'] = float(self.ir_T_max_var.get())
+            self.config['ir_control']['H_max'] = float(self.ir_H_max_var.get())
             
             
             self.save_config()
@@ -606,6 +616,8 @@ class AeroGreenHouseGUI:
         self.ir_file_var.set(self.config.get('ir_control', {}).get('file_ac_name', 'ac_controller.json'))
         self.ir_time_max_var.set(str(self.config.get('ir_control', {}).get('time_max_on', 30)))
         self.ir_time_sep_var.set(str(self.config.get('ir_control', {}).get('control_time', 30)))
+        self.ir_T_max_var.set(str(self.config.get('ir_control', {}).get('T_max', 25.0)))
+        self.ir_H_max_var.set(str(self.config.get('ir_control', {}).get('H_max', 65.0)))
         messagebox.showinfo("Successo", "Configurazione ricaricata!")
     
     def update_log_file_label(self):
@@ -759,11 +771,6 @@ class AeroGreenHouseGUI:
                 try:
                     # Leggi i dati
                     temp, humidity = measure_dht_22(dht)
-                    sleep(3)
-                    temp, humidity = measure_dht_22(dht)
-                    sleep(3)
-                    
-                    temp, humidity = measure_dht_22(dht)
                     vpd = self.ah.VPD(temp, humidity)
 
                     
@@ -907,7 +914,7 @@ class AeroGreenHouseGUI:
         params_frame = ttk.Frame(inner)
         params_frame.pack(pady=10)
  
-        ttk.Label(params_frame, text="T activation:", font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(params_frame, text="T_opt:", font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
         self.ac_topt_label = ttk.Label(
             params_frame,
             text=f"{self.config.get('ir_control', {}).get('T_max', '--')} °C",
@@ -915,7 +922,7 @@ class AeroGreenHouseGUI:
         )
         self.ac_topt_label.grid(row=0, column=1, sticky=tk.W, padx=5)
  
-        ttk.Label(params_frame, text="H activation:", font=('Arial', 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
+        ttk.Label(params_frame, text="H_opt:", font=('Arial', 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
         self.ac_hopt_label = ttk.Label(
             params_frame,
             text=f"{self.config.get('ir_control', {}).get('H_max', '--')} %",
@@ -985,7 +992,7 @@ class AeroGreenHouseGUI:
                         self.root.after(0, lambda cmd=last_cmd: self.ac_last_cmd_label.config(text=cmd))
                     except Exception as e:
                         self.ah.logger.error(f"AC_CONTROL: Errore nel loop di controllo: {e}")
-                sleep(interval)
+                sleep(interval*60)
  
             self.ah.logger.info("AC_CONTROL: Controllo automatico condizionatore ## DISATTIVATO ##")
  

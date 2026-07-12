@@ -39,8 +39,6 @@ class IRController:
             f"Topt={self.Topt}°C, Hopt={self.Hopt}%"
         )
 
-        
-
     # ------------------------------------------------------------------
     # Invio comandi
     # ------------------------------------------------------------------
@@ -52,7 +50,7 @@ class IRController:
         :param command: command name (e.g., 'Tlow', 'Hlow', 'off')
         :return: process exit code
         """
-        cmd = f"piir play --gpio {self.tx_gpio} {self.file_ac_name} {command}"
+        cmd = f"piir play --gpio {self.tx_gpio} -f {self.file_ac_name} {command}"
         self.logger.info(f"IR_CONTROLLER: Invio comando '{command}' → GPIO {self.tx_gpio} | cmd: {cmd}")
         result = os.system(cmd)
         if result != 0:
@@ -96,12 +94,12 @@ class IRController:
 
         # ---- Controllo TEMPERATURA (priorità) ----
         if current_temp > self.Topt:
-            if self.last_command_sent != 'Tlow':
+            if self.last_command_sent != 'T_low_21':
                 self.logger.info(
                     f"IR_CONTROLLER: T={current_temp:.1f}°C > Topt={self.Topt}°C → Send 'Tlow'."
                 )
-                self.send_command('Tlow')
-                self.last_command_sent = 'Tlow'
+                self.send_command('T_low_21')
+                self.last_command_sent = 'T_low_21'
                 self.command_sent_time = now
             else:
                 self.logger.debug(
@@ -112,7 +110,7 @@ class IRController:
             return
 
         # Temperatura OK → se era in Tlow, spegni
-        if self.last_command_sent == 'Tlow':
+        if self.last_command_sent == 'T_low_21':
             self.logger.info(
                 f"IR_CONTROLLER: T={current_temp:.1f}°C ≤ Topt={self.Topt}°C. "
                 f"Condizionamento temperatura completato → Invio 'off'."
@@ -123,12 +121,12 @@ class IRController:
 
         # ---- Controllo UMIDITÀ (solo se temperatura OK e AC non in modalità Tlow) ----
         if current_humidity > self.Hopt:
-            if self.last_command_sent != 'Hlow':
+            if self.last_command_sent != 'dry':
                 self.logger.info(
                     f"IR_CONTROLLER: H={current_humidity:.1f}% > Hopt={self.Hopt}% → Invio 'Hlow'."
                 )
-                self.send_command('Hlow')
-                self.last_command_sent = 'Hlow'
+                self.send_command('dry')
+                self.last_command_sent = 'dry'
                 self.command_sent_time = now
             else:
                 self.logger.debug(
@@ -137,7 +135,7 @@ class IRController:
                 )
         else:
             # Umidità OK → se era in Hlow, spegni
-            if self.last_command_sent == 'Hlow':
+            if self.last_command_sent == 'dry':
                 self.logger.info(
                     f"IR_CONTROLLER: H={current_humidity:.1f}% ≤ Hopt={self.Hopt}%. "
                     f"Condizionamento umidità completato → Invio 'off'."

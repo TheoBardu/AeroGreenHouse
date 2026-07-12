@@ -3,7 +3,7 @@ T_var:
   Hopt: 65.0
 dht22:
   pin: 27
-  read_interval: 600
+  read_interval: 300
   save: true
   saving_dir: /home/fishnplants/Desktop/data/TH/
 log:
@@ -15,8 +15,8 @@ gpio_pins:
 - name: AEROPONICS
   pin: 19
   what_type: pump
-  interval: 10
-  on_time: 15
+  interval: 1200
+  on_time: 5
 - name: IDROPONICS
   pin: 12
   what_type: pump
@@ -26,12 +26,12 @@ gpio_pins:
   pin: 26
   what_type: sensor
 ir_control:
-  rx_pin : 20
-  tx_pin : 21
-  file_ac_name: /home/fishnplants/Desktop/ac_remote.json
-  default_temp: 22    # Temperatura di default climatizzatore
+  rx_pin: 20
+  tx_pin: 21
+  file_ac_name: /home/fishnplants/Desktop/codes/python/AeroGreenHouse/ir_controller/ac_remote.json
+  default_temp: 22
   enabled: true
-  time_max_on: 300 # Max on time for the Air conditioner
-  control_time: 2 #minutes separation for the control
-  T_max: 24.0
-  H_max: 65.0
+  time_max_on: 10.0
+  control_time: 5.0
+  T_max: 26.0
+  H_max: 65.5

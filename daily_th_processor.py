@@ -41,7 +41,7 @@ TH_DATA_DIR = "/home/fishnplants/Desktop/data/TH/"
 PLOT_OUTPUT_DIR = "/home/fishnplants/Desktop/data/PLOT/"
 
 # Path completo dello script uploader.py
-UPLOADER_SCRIPT = "/home/fishnplants/Desktop/codes/python/upload_website/uploader.py"
+UPLOADER_SCRIPT = "/home/fishnplants/Desktop/codes/python/AeroGreenHouse/uploader/uploader.py"
 
 # Nome del file plot di output (deve coincidere con quello atteso da uploader.py)
 PLOT_FILENAME = "plot.png"
