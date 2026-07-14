@@ -31,3 +31,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Dati/log generati dal test della GUI (test_gui.py)
+_gui_test_data/
