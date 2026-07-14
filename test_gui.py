@@ -106,7 +106,7 @@ _install_hardware_stubs()
 import yaml
 import helper_aeroGreenHouse as H
 import ir_controller.ir_controller as ir_controller
-from ultrasonic_sensor import ultrasonic_measurement as TM
+from sensors.ultrasonic_sensor import ultrasonic_measurement as TM
 
 
 def _patched_load_config(self, file_name):

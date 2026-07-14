@@ -599,7 +599,7 @@ class TankManager():
         self._gpio_ready = False
 
         # Riuso del modulo standalone (resta eseguibile da solo)
-        from ultrasonic_sensor import ultrasonic_measurement as tank_mod
+        from sensors.ultrasonic_sensor import ultrasonic_measurement as tank_mod
         self._tank = tank_mod
 
     def _params(self):
