@@ -49,6 +49,7 @@ Date: 2026-07-14
 import os
 import json
 import math
+import glob
 import time
 from datetime import datetime
 
@@ -93,9 +94,20 @@ GAIN = qwiic_as7265x.kGain16x if _HW_AVAILABLE else 2  # 16x
 INTEGRATION_CYCLES = 50    # tempo di integrazione ~ valore * 2.8 ms
 SETTLE_TIME = 0.3          # attesa di assestamento del LED prima della misura [s]
 
+# Intervallo tra due letture nel monitoraggio periodico [s]. Un'ora e'
+# sufficiente: l'MCARI2 varia su scala di giorni e ogni misura accende il LED.
+READ_INTERVAL_S = 3600
+
 # Persistenza
 SAVE_DIR = "/home/fishnplants/Desktop/data/SPECTRO/"
 CALIB_FILE = os.path.join(SAVE_DIR, "spectro_calibration.json")
+CALIB_NAME = "spectro_calibration.json"
+FILE_FORMAT = "SPECTRO_%Y_%m_%d.txt"
+
+
+def _calib_path(save_dir=SAVE_DIR):
+    """Percorso del file di taratura nella directory indicata."""
+    return os.path.join(save_dir, CALIB_NAME)
 
 
 # =============================================================================
@@ -192,7 +204,7 @@ def read_all_channels(sensor, use_bulb=True):
 # TARATURA (riferimento bianco)
 # =============================================================================
 
-def calibrate(sensor):
+def calibrate(sensor, save_dir=SAVE_DIR):
     """
     Esegue la taratura misurando il riferimento bianco e la salva su file.
 
@@ -203,6 +215,7 @@ def calibrate(sensor):
 
     Args:
         sensor: istanza QwiicAS7265x inizializzata.
+        save_dir: directory in cui salvare la taratura.
 
     Returns:
         dict {560, 680, 810} con i valori di riferimento appena misurati.
@@ -216,16 +229,19 @@ def calibrate(sensor):
         "timestamp": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
     }
 
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    with open(CALIB_FILE, "w") as f:
+    os.makedirs(save_dir, exist_ok=True)
+    with open(_calib_path(save_dir), "w") as f:
         json.dump(payload, f, indent=2)
 
     return reference
 
 
-def load_calibration():
+def load_calibration(save_dir=SAVE_DIR):
     """
     Carica i valori di riferimento salvati dall'ultima taratura.
+
+    Args:
+        save_dir: directory in cui cercare la taratura.
 
     Returns:
         dict {560, 680, 810} con i valori di riferimento bianco.
@@ -233,13 +249,15 @@ def load_calibration():
     Raises:
         FileNotFoundError: se non esiste una taratura salvata.
     """
-    if not os.path.exists(CALIB_FILE):
+    calib_file = _calib_path(save_dir)
+
+    if not os.path.exists(calib_file):
         raise FileNotFoundError(
-            f"Nessuna taratura trovata in {CALIB_FILE}. Eseguire prima la taratura "
+            f"Nessuna taratura trovata in {calib_file}. Eseguire prima la taratura "
             "(funzione calibrate) puntando il sensore sul riferimento bianco."
         )
 
-    with open(CALIB_FILE, "r") as f:
+    with open(calib_file, "r") as f:
         payload = json.load(f)
 
     # Avvisa se le impostazioni correnti non coincidono con quelle della taratura:
@@ -356,16 +374,44 @@ def measure_mcari2(sensor, reference_bands=None):
     return bands, reflectance, index
 
 
+# Chiavi di stato della coltura. Sono l'interfaccia verso chi consuma il dato
+# (es. la GUI, che ci mappa sopra un colore): le soglie numeriche restano qui.
+STATO_STRESS = "stress"
+STATO_LIMITE = "limite"
+STATO_SANA = "sana"
+STATO_MOLTO_SANA = "molto_sana"
+
+TESTI_MCARI2 = {
+    STATO_STRESS: "Possibile stress idrico o carenza nutrizionale (es. azoto)",
+    STATO_LIMITE: "Coltura al limite, tenere sotto osservazione",
+    STATO_SANA: "Coltura sana",
+    STATO_MOLTO_SANA: "Coltura molto sana, nessuna carenza rilevata",
+}
+
+
+def classifica_mcari2(valore):
+    """
+    Classifica l'MCARI2 secondo le soglie della Knowledge Base FnP.
+
+    Args:
+        valore: indice MCARI2.
+
+    Returns:
+        Una delle chiavi STATO_* (stress / limite / sana / molto_sana).
+    """
+    if valore < 0.4:
+        return STATO_STRESS
+    elif valore < 0.6:
+        return STATO_LIMITE
+    elif valore <= 0.9:
+        return STATO_SANA
+    else:
+        return STATO_MOLTO_SANA
+
+
 def interpreta_mcari2(valore):
     """Interpretazione qualitativa dell'MCARI2 secondo le soglie della Knowledge Base."""
-    if valore < 0.4:
-        return "Possibile stress idrico o carenza nutrizionale (es. azoto)"
-    elif valore <= 0.7:
-        return "Coltura sana"
-    elif valore <= 0.9:
-        return "Coltura molto sana, nessuna carenza rilevata"
-    else:
-        return "Valore fuori dai range tipici attesi, verificare la misura"
+    return TESTI_MCARI2[classifica_mcari2(valore)]
 
 
 # =============================================================================
@@ -388,7 +434,7 @@ def save_measurement(bands, reflectance, index, save_dir=SAVE_DIR):
     """
     os.makedirs(save_dir, exist_ok=True)
     now = datetime.now()
-    file_path = os.path.join(save_dir, now.strftime("SPECTRO_%Y_%m_%d.txt"))
+    file_path = os.path.join(save_dir, now.strftime(FILE_FORMAT))
     timestamp = now.strftime("%Y/%m/%d %H:%M:%S")
 
     line = (f"{timestamp}\t"
@@ -402,3 +448,67 @@ def save_measurement(bands, reflectance, index, save_dir=SAVE_DIR):
             f.write("datetime\t\t\t green_raw\t red_raw\t nir_raw\t "
                     "R_green\t R_red\t R_nir\t MCARI2\n")
         f.write(line)
+
+
+def _parse_measurement_line(line):
+    """
+    Interpreta una riga di un file SPECTRO_*.txt.
+
+    Returns:
+        dict {timestamp, mcari2} oppure None se la riga non e' una misura
+        (header, riga vuota o malformata).
+    """
+    parts = line.strip().split("\t")
+    if len(parts) < 8:
+        return None
+
+    try:
+        timestamp = datetime.strptime(parts[0].strip(), "%Y/%m/%d %H:%M:%S")
+        index = float(parts[7].strip())
+    except ValueError:
+        # Header o riga corrotta: si salta senza far fallire la lettura.
+        return None
+
+    return {"timestamp": timestamp, "mcari2": index}
+
+
+def load_measurements(save_dir=SAVE_DIR, max_rows=10):
+    """
+    Rilegge le ultime misure salvate dai file giornalieri SPECTRO_*.txt.
+
+    Simmetrica a save_measurement: serve a ricostruire lo storico dell'indice
+    (es. all'avvio della GUI) senza tenere nulla in memoria tra un avvio e l'altro.
+    Le righe non interpretabili (header compreso) vengono ignorate.
+
+    Args:
+        save_dir: directory dei file giornalieri.
+        max_rows: numero massimo di misure da restituire.
+
+    Returns:
+        Lista di dict {timestamp: datetime, mcari2: float}, dalla piu' recente
+        alla piu' vecchia. Lista vuota se non esistono dati.
+    """
+    if not os.path.isdir(save_dir):
+        return []
+
+    # I nomi contengono la data zero-padded: l'ordine alfabetico inverso e'
+    # anche l'ordine cronologico inverso.
+    files = sorted(glob.glob(os.path.join(save_dir, "SPECTRO_*.txt")), reverse=True)
+
+    measurements = []
+    for file_path in files:
+        try:
+            with open(file_path, "r") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+
+        # Dentro al file le misure sono in ordine cronologico: si parte dal fondo.
+        for line in reversed(lines):
+            row = _parse_measurement_line(line)
+            if row is not None:
+                measurements.append(row)
+                if len(measurements) >= max_rows:
+                    return measurements
+
+    return measurements
