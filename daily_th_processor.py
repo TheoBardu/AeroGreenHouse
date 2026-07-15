@@ -19,10 +19,6 @@ import sys
 import logging
 import schedule
 import subprocess
-import matplotlib
-matplotlib.use('Agg')  # Backend non-interattivo per salvataggio file
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import pandas as pd
 from time import sleep
 from datetime import datetime, timedelta
@@ -144,6 +140,10 @@ def generate_plot(df: pd.DataFrame, output_dir: str, date_label: str):
     
     Reference: test.py (FnP codebase), Fish and Plants notes.pdf
     """
+    import matplotlib
+    matplotlib.use('Agg')  # Backend non-interattivo per salvataggio file
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, PLOT_FILENAME)
 
