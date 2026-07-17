@@ -20,6 +20,10 @@ CSV_NAME = "GROWTH.csv"
 
 SECONDS_PER_DAY = 86400
 
+# File di configurazione su cui la calibrazione scrive il riferimento.
+# Path relativo, come in aeroHelper e gui.py: richiede cwd = radice del progetto.
+CONFIG_FILE = "config.yaml"
+
 
 # =====================================================================
 # Salvataggio / lettura dello storico (file unico cumulativo)
@@ -81,6 +85,34 @@ def load_growth_data(save_dir: str, max_rows: int = None, logger=None) -> list:
     if max_rows is not None:
         history = history[-max_rows:]
     return history
+
+
+def save_reference_height(value_cm: float, config_file: str = None) -> None:
+    '''
+    Scrive l'altezza di riferimento in config.yaml, senza toccare altro.
+
+    Il file viene riletto da disco, si aggiorna la sola chiave
+    plant_growth.reference_height_cm e si riscrive. Deliberatamente NON si
+    riversa il dizionario in memoria del manager: in simulazione (test_gui.py)
+    quel dizionario contiene percorsi finti, che finirebbero nel config reale.
+
+    :param value_cm:    altezza di riferimento misurata [cm]
+    :param config_file: file di configurazione (default: CONFIG_FILE del modulo)
+    '''
+    import yaml
+
+    if config_file is None:
+        # Risolto qui e non come default dell'argomento, altrimenti il valore
+        # verrebbe congelato all'import e non sarebbe piu' dirottabile.
+        config_file = CONFIG_FILE
+
+    with open(config_file, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    cfg.setdefault('plant_growth', {})['reference_height_cm'] = value_cm
+
+    with open(config_file, "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
 
 
 # =====================================================================
@@ -156,6 +188,64 @@ class PlantGrowthManager():
             self._gpio_ready = True
             self.logger.info(f"GROWTH: GPIO inizializzati TRIG=GPIO{trig}, ECHO=GPIO{echo}")
 
+    def _measure_mean_distance(self, p):
+        '''
+        Media di n_samples letture del sensore, con validazione.
+
+        Unica definizione di "misura valida": la usano sia read_now() sia
+        calibration_distance().
+
+        :param p: parametri correnti (da _params())
+        :return:  distanza in cm, oppure None se la misura non e' valida.
+        '''
+        self._ensure_gpio(p['trig'], p['echo'])
+
+        dist = self._growth.measure_distance_mean(p['trig'], p['echo'], n_samples=p['n'])
+
+        if dist < 0:
+            self.logger.warning("GROWTH: Misura non valida (timeout o fuori range). "
+                                "Verificare il posizionamento del sensore.")
+            return None
+
+        # Range fisico del sensore (2-400 cm per HC-SR04)
+        if dist < 2.0 or dist > 400.0:
+            self.logger.warning(f"GROWTH: Distanza {dist:.1f}cm fuori dal range "
+                                "operativo del sensore (2-400cm). Misura ignorata.")
+            return None
+
+        return dist
+
+    def calibration_distance(self):
+        '''
+        Tara l'altezza di riferimento misurandola con il sensore stesso.
+
+        Va eseguita a camera radicale vuota (piante non ancora cresciute): la
+        distanza letta in quel momento e' per definizione il riferimento, cioe'
+        lo zero da cui si contera' la crescita.
+
+        Il valore viene scritto in config.yaml e aggiornato anche nella
+        configurazione in memoria: _params() la rilegge ad ogni chiamata, quindi
+        la misura successiva usa il nuovo riferimento senza riavviare il
+        programma.
+
+        :return: riferimento misurato in cm, oppure None se la misura non e' valida.
+        '''
+        p = self._params()
+
+        dist = self._measure_mean_distance(p)
+        if dist is None:
+            self.logger.warning("GROWTH: calibrazione non eseguita, misura non valida.")
+            return None
+
+        reference = round_decimals(dist, p['decimals'])
+
+        save_reference_height(reference)
+        self.configs.setdefault('plant_growth', {})['reference_height_cm'] = reference
+
+        self.logger.info(f"GROWTH: calibrazione eseguita, riferimento = {reference}cm "
+                         f"(era {p['reference']}cm)")
+        return reference
+
     def read_now(self):
         '''
         Esegue una misura singola dell'altezza della pianta (media di n_samples letture).
@@ -167,20 +257,11 @@ class PlantGrowthManager():
                  oppure None se la misura non e' valida.
         '''
         p = self._params()
-        self._ensure_gpio(p['trig'], p['echo'])
 
-        dist = self._growth.measure_distance_mean(p['trig'], p['echo'], n_samples=p['n'])
+        dist = self._measure_mean_distance(p)
         timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
-        if dist < 0:
-            self.logger.warning("GROWTH: Misura non valida (timeout o fuori range). "
-                                "Verificare il posizionamento del sensore.")
-            return None
-
-        # Range fisico del sensore (2-400 cm per HC-SR04)
-        if dist < 2.0 or dist > 400.0:
-            self.logger.warning(f"GROWTH: Distanza {dist:.1f}cm fuori dal range "
-                                "operativo del sensore (2-400cm). Misura ignorata.")
+        if dist is None:
             return None
 
         # Altezza pianta = riferimento - distanza letta (clipping: non puo' essere negativa)

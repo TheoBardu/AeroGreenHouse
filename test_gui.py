@@ -17,6 +17,9 @@ Cosa fa:
     crescita di 10 giorni, cosi' le tab Spettrometro e Crescita sono gia'
     popolate al primo avvio.
   - Rende l'invio dei comandi IR e l'upload web delle no-op (nessun effetto reale).
+  - Dirotta la calibrazione del sensore di altezza su una COPIA del config
+    (_gui_test_data/config_sim.yaml): premendo 'Calibrazione' il config.yaml
+    reale non viene toccato.
   - Avvia la vera GUI (gui.AeroGreenHouseGUI).
 
 NB: e' SOLO uno strumento di sviluppo. Sul Raspberry Pi va eseguito `python gui.py`.
@@ -48,6 +51,9 @@ os.makedirs(SPECTRO_DIR, exist_ok=True)
 # Dati di crescita (file cumulativo GROWTH.csv)
 GROWTH_DIR = os.path.join(TEST_DATA_DIR, 'GROWTH')
 os.makedirs(GROWTH_DIR, exist_ok=True)
+
+# Copia del config su cui scrive la calibrazione (mai il config.yaml reale)
+SIM_CONFIG = os.path.join(TEST_DATA_DIR, 'config_sim.yaml')
 
 # Valore del riferimento bianco simulato su ogni banda: i getter del sensore
 # finto restituiscono riflettanza * WHITE_REF, cosi' la riflettanza calcolata
@@ -171,9 +177,12 @@ _install_hardware_stubs()
 # ---------------------------------------------------------------------------
 # 2) Patch di percorsi e comportamenti per la simulazione
 # ---------------------------------------------------------------------------
+import shutil
+
 import yaml
 import helper_aeroGreenHouse as H
 import ir_controller.ir_controller as ir_controller
+from managers_classes import plant_growth as PG
 from sensors.ultrasonic_sensor import ultrasonic_measurement as TM
 from sensors.spectrometer import mcari2_as7265x as SP
 
@@ -234,8 +243,21 @@ def _seed_growth_data():
             f.write(f"{day.strftime('%Y/%m/%d %H:%M:%S')},{h_plant}\n")
 
 
+def _redirect_calibration():
+    """
+    Fa scrivere la calibrazione dell'altezza su una copia del config.
+
+    Senza questo, premere 'Calibrazione' nella GUI di sviluppo riscriverebbe il
+    config.yaml REALE con un valore inventato dal sensore finto. La copia viene
+    rifatta ad ogni avvio, cosi' resta fedele al config vero.
+    """
+    shutil.copyfile('config.yaml', SIM_CONFIG)
+    PG.CONFIG_FILE = SIM_CONFIG
+
+
 _seed_spectro_data()
 _seed_growth_data()
+_redirect_calibration()
 
 
 def _patched_load_config(self, file_name):

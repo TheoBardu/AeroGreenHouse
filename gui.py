@@ -418,6 +418,49 @@ class AeroGreenHouseGUI:
         ttk.Entry(spectro_cfg_frame, textvariable=self.spectro_dir_var, width=50).grid(
             row=1, column=1, columnspan=3, sticky=tk.EW)
 
+        # Frame per Crescita (plant_growth)
+        growth_cfg_frame = ttk.LabelFrame(
+            parent, text="Crescita (altezza pianta) — sensore ultrasonico HC-SR04", padding=10)
+        growth_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        g = self.config.get('plant_growth', {})
+
+        ttk.Label(growth_cfg_frame, text="Altezza riferimento (cm):").grid(row=0, column=0, sticky=tk.W)
+        self.growth_ref_var = tk.StringVar(value=str(g.get('reference_height_cm', 70.0)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_ref_var, width=10).grid(row=0, column=1, sticky=tk.W)
+        ttk.Label(growth_cfg_frame, text="(impostata dal bottone 📐 Calibrazione nella tab Crescita)",
+                  foreground='gray').grid(row=0, column=2, columnspan=2, sticky=tk.W, padx=(20, 0))
+
+        ttk.Label(growth_cfg_frame, text="TRIG Pin GPIO:").grid(row=1, column=0, sticky=tk.W)
+        self.growth_trig_var = tk.StringVar(value=str(g.get('trig_pin', 5)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_trig_var, width=10).grid(row=1, column=1, sticky=tk.W)
+
+        ttk.Label(growth_cfg_frame, text="ECHO Pin GPIO:").grid(row=1, column=2, sticky=tk.W, padx=(20, 0))
+        self.growth_echo_var = tk.StringVar(value=str(g.get('echo_pin', 6)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_echo_var, width=10).grid(row=1, column=3, sticky=tk.W)
+
+        ttk.Label(growth_cfg_frame, text="Intervallo misura (giorni):").grid(row=2, column=0, sticky=tk.W)
+        self.growth_interval_var = tk.StringVar(value=str(g.get('read_interval_days', 1)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_interval_var, width=10).grid(row=2, column=1, sticky=tk.W)
+
+        ttk.Label(growth_cfg_frame, text="N. campioni:").grid(row=2, column=2, sticky=tk.W, padx=(20, 0))
+        self.growth_nsamples_var = tk.StringVar(value=str(g.get('n_samples', 3)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_nsamples_var, width=10).grid(row=2, column=3, sticky=tk.W)
+
+        ttk.Label(growth_cfg_frame, text="Cifre decimali:").grid(row=3, column=0, sticky=tk.W)
+        self.growth_decimals_var = tk.StringVar(value=str(g.get('decimals', 1)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_decimals_var, width=10).grid(row=3, column=1, sticky=tk.W)
+
+        ttk.Label(growth_cfg_frame, text="N. misure nello storico:").grid(row=3, column=2, sticky=tk.W, padx=(20, 0))
+        self.growth_history_var = tk.StringVar(value=str(g.get('history_len', 30)))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_history_var, width=10).grid(row=3, column=3, sticky=tk.W)
+
+        ttk.Label(growth_cfg_frame, text="Directory dati:").grid(row=4, column=0, sticky=tk.W)
+        self.growth_dir_var = tk.StringVar(
+            value=g.get('saving_dir', '/home/fishnplants/Desktop/data/GROWTH/'))
+        ttk.Entry(growth_cfg_frame, textvariable=self.growth_dir_var, width=50).grid(
+            row=4, column=1, columnspan=3, sticky=tk.EW)
+
         # Frame per Log
         log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
         log_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -863,6 +906,17 @@ class AeroGreenHouseGUI:
             self.config['spectro']['history_len'] = int(self.spectro_history_var.get())
             self.config['spectro']['saving_dir'] = self.spectro_dir_var.get()
 
+            # Sezione crescita (plant_growth)
+            self.config.setdefault('plant_growth', {})
+            self.config['plant_growth']['reference_height_cm'] = float(self.growth_ref_var.get())
+            self.config['plant_growth']['trig_pin'] = int(self.growth_trig_var.get())
+            self.config['plant_growth']['echo_pin'] = int(self.growth_echo_var.get())
+            self.config['plant_growth']['read_interval_days'] = float(self.growth_interval_var.get())
+            self.config['plant_growth']['n_samples'] = int(self.growth_nsamples_var.get())
+            self.config['plant_growth']['decimals'] = int(self.growth_decimals_var.get())
+            self.config['plant_growth']['history_len'] = int(self.growth_history_var.get())
+            self.config['plant_growth']['saving_dir'] = self.growth_dir_var.get()
+
             self.save_config()
         except ValueError:
             messagebox.showerror("Errore", "Inserire valori validi. Verificare i numeri.")
@@ -899,6 +953,16 @@ class AeroGreenHouseGUI:
         self.spectro_interval_var.set(str(sp.get('read_interval', 3600)))
         self.spectro_history_var.set(str(sp.get('history_len', 10)))
         self.spectro_dir_var.set(sp.get('saving_dir', '/home/fishnplants/Desktop/data/SPECTRO/'))
+
+        g = self.config.get('plant_growth', {})
+        self.growth_ref_var.set(str(g.get('reference_height_cm', 70.0)))
+        self.growth_trig_var.set(str(g.get('trig_pin', 5)))
+        self.growth_echo_var.set(str(g.get('echo_pin', 6)))
+        self.growth_interval_var.set(str(g.get('read_interval_days', 1)))
+        self.growth_nsamples_var.set(str(g.get('n_samples', 3)))
+        self.growth_decimals_var.set(str(g.get('decimals', 1)))
+        self.growth_history_var.set(str(g.get('history_len', 30)))
+        self.growth_dir_var.set(g.get('saving_dir', '/home/fishnplants/Desktop/data/GROWTH/'))
 
         messagebox.showinfo("Successo", "Configurazione ricaricata!")
 
@@ -1459,6 +1523,8 @@ class AeroGreenHouseGUI:
                    command=self.start_growth_reading).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="⏹️ Arresta Lettura", style='Stop.TButton',
                    command=self.stop_growth_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="📐 Calibrazione",
+                   command=self.calibrate_growth).pack(side=tk.LEFT, padx=5)
 
         # Frame principale per i dati
         main_frame = ttk.LabelFrame(parent, text="ALTEZZA PIANTA", padding=15)
@@ -1625,6 +1691,53 @@ class AeroGreenHouseGUI:
             messagebox.showwarning("Avviso", "Nessuna misura crescita in corso")
             return
         messagebox.showinfo("Successo", "Misura crescita arrestata!")
+
+    def calibrate_growth(self):
+        """Tara l'altezza di riferimento del sensore di crescita (PlantGrowthManager)."""
+        # Il sensore e' uno solo: se la lettura periodica scattasse durante la
+        # calibrazione, i due impulsi ultrasonici si disturberebbero a vicenda.
+        if self.ah.plant_growth.is_running():
+            messagebox.showwarning(
+                "Lettura in corso",
+                "È in corso la lettura periodica della crescita.\n\n"
+                "Arrestare prima la lettura con '⏹️ Arresta Lettura', "
+                "poi ripetere la calibrazione."
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Attenzione",
+            "Attenzione: Vuoi effettuare la calibrazione per il sensore di altezza?",
+            icon='warning'
+        ):
+            return
+
+        try:
+            reference = self.ah.plant_growth.calibration_distance()
+            if reference is None:
+                messagebox.showwarning(
+                    "Misura non valida",
+                    "Il sensore non ha restituito una misura valida.\n\n"
+                    "Verificare il posizionamento e il cablaggio del sensore."
+                )
+                return
+
+            # Allinea il config della GUI e il campo della tab Configurazione:
+            # senza, il prossimo 'Salva Configurazione' riscriverebbe sul file il
+            # vecchio riferimento, annullando la calibrazione appena fatta.
+            self.config.setdefault('plant_growth', {})['reference_height_cm'] = reference
+            self.growth_ref_var.set(str(reference))
+
+            messagebox.showinfo(
+                "Successo",
+                f"Calibrazione completata.\n\n"
+                f"Altezza di riferimento: {reference} cm\n\n"
+                "Da adesso questa distanza è lo zero: le prossime misure "
+                "conteranno la crescita a partire da qui."
+            )
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella calibrazione: {str(e)}")
+            self.ah.logger.error(f"Errore calibrazione GROWTH: {str(e)}")
 
     def read_growth_now(self):
         """Misura immediatamente l'altezza della pianta (PlantGrowthManager)."""

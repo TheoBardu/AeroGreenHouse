@@ -131,14 +131,14 @@ Tkinter con 9 tab:
 
 | Tab | Contenuto |
 |---|---|
-| **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank, spectro) |
+| **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank, spectro, plant_growth) |
 | **Processi Attivi** | Spie verde/rosso, aggiornate ogni secondo |
 | **Gestione Job** | Treeview dei job; crea/modifica/elimina/attiva/disattiva |
 | **Ambient** | Letture T/H/VPD, avvio/arresto della lettura periodica |
 | **Climatizzatore** | Avvio/arresto del controllo automatico AC, ultimo comando IR |
 | **Livelli Serbatoio** | Distanza, livello, volume, percentuale di riempimento |
 | **Spettrometro** | Indice MCARI2, spia dello stato della pianta, taratura, storico |
-| **Crescita** | Altezza pianta e data dell'ultima misura, grafico dell'andamento, tabella (§9.7) |
+| **Crescita** | Altezza pianta e data dell'ultima misura, grafico dell'andamento, tabella, calibrazione (§9.8) |
 | **Output/Log** | Console colorata dei log in tempo reale |
 
 La GUI usa tre meccanismi periodici basati su `root.after()` (quindi sul thread Tk, senza
@@ -773,8 +773,11 @@ Il **clipping a 0** ha lo stesso ruolo del clipping del serbatoio (§8.4): prote
 taratura imprecisa di `reference_height_cm`. Senza, un riferimento sottostimato di pochi
 millimetri produrrebbe altezze negative — fisicamente impossibili.
 
-`reference_height_cm` è quindi **il parametro da tarare**: va misurato col metro, dal sensore
-alla camera radicale, prima che le piante crescano.
+`reference_height_cm` è quindi **il parametro da tarare**, e si tara con il sensore stesso
+(§9.6) a camera radicale vuota: la distanza che il sensore legge in quel momento *è* per
+definizione il riferimento. Misurarlo col metro è possibile ma meno accurato, perché il metro
+e il sensore non partono necessariamente dallo stesso punto: il sensore misura dalla propria
+membrana, e un errore sul riferimento si trasferisce **uguale su ogni misura successiva**.
 
 ### 9.2 Parametri con fallback
 
@@ -863,7 +866,51 @@ riavvio. È tenuto in ordine **cronologico crescente** — è l'ordine che serve
 la tabella lo inverte al momento di visualizzarlo. Le righe malformate vengono loggate e
 saltate, non fanno fallire la lettura (stessa filosofia di `daily_th_processor.py`, §13.1).
 
-### 9.6 Il ciclo periodico
+### 9.6 Calibrazione del riferimento
+
+`calibration_distance()` esegue la taratura: misura la distanza attuale (media di `n_samples`
+letture, con la stessa validazione di `read_now()`) e la salva come `reference_height_cm`.
+Va eseguita **a camera radicale vuota**. Dalla GUI è il bottone "📐 Calibrazione" della tab
+Crescita, che chiede conferma prima di procedere — stesso schema della taratura dello
+spettrometro (§10.3).
+
+```python
+dist = self._measure_mean_distance(p)          # media validata: se None, non scrive nulla
+reference = round_decimals(dist, p['decimals'])
+save_reference_height(reference)                                                # su file
+self.configs.setdefault('plant_growth', {})['reference_height_cm'] = reference  # in memoria
+```
+
+Tre scelte meritano una spiegazione.
+
+**1. Il file viene riletto da disco, non riversato dalla memoria.** `save_reference_height()`
+apre `config.yaml`, aggiorna la sola chiave `plant_growth.reference_height_cm` e riscrive.
+Riversare `self.configs` sarebbe più diretto ma sbagliato: quel dizionario può contenere
+valori modificati a runtime — `test_gui.py` ci inietta percorsi di simulazione — che
+finirebbero nel config di produzione. Toccando una chiave sola, invece, nient'altro viene
+calpestato.
+
+**2. Il valore è aggiornato anche in memoria, e questo evita il riavvio.** `_params()` rilegge
+`self.configs` ad ogni chiamata (§9.2), quindi la misura successiva usa già il nuovo
+riferimento: subito dopo la calibrazione `h_plant` vale 0, come atteso.
+
+**3. La GUI deve riallineare il proprio dizionario.** Qui si incontra un difetto strutturale
+del progetto (§17.6): `self.config` della GUI e `self.ah.configs` dei manager sono **due
+dizionari distinti**, letti separatamente dallo stesso file. `save_config()` riversa l'intero
+`self.config`, quindi senza contromisure la sequenza sarebbe:
+
+> calibrazione (file: 63.2) → l'utente preme "Salva Configurazione" → la GUI riversa il suo
+> dizionario, che ha ancora 70.0 → **calibrazione persa in silenzio**.
+
+Per questo `calibration_distance()` **restituisce** il valore, e la GUI aggiorna sia il
+proprio `self.config` sia la StringVar del campo "Altezza riferimento" della tab
+Configurazione — è quella StringVar che `save_config_changes` rilegge al salvataggio.
+
+Il bottone si rifiuta di calibrare se la lettura periodica è in corso: il sensore è uno solo,
+e due impulsi ultrasonici sovrapposti falserebbero entrambe le misure. Una calibrazione
+falsata è insidiosa perché sposta **tutte** le misure successive.
+
+### 9.7 Il ciclo periodico
 
 ```python
 p = self._params()
@@ -882,10 +929,11 @@ un'attesa di un giorno intero.
 Il conteggio **non è persistito**: dopo un riavvio del programma riparte da zero, con una
 misura immediata. Per una cadenza giornaliera è accettabile.
 
-### 9.7 La tab "Crescita" e il grafico
+### 9.8 La tab "Crescita" e il grafico
 
 Mostra l'altezza dell'ultima misura, la sua data, un grafico dell'andamento nel tempo e la
-tabella data/altezza. Tutti i valori sono in **cm**.
+tabella data/altezza. Tutti i valori sono in **cm**. I bottoni sono "📏 Misura Adesso",
+"▶️ Attiva Lettura", "⏹️ Arresta Lettura" e "📐 Calibrazione" (§9.6).
 
 Il grafico è disegnato con le **primitive native di `tk.Canvas`** (`create_line`,
 `create_oval`), non con matplotlib. La scelta è dettata dall'hardware: su un Raspberry Pi
@@ -901,7 +949,7 @@ Il ridisegno è agganciato all'evento `<Configure>` (quindi segue il ridimension
 finestra) e viene rifatto dopo ogni misura. Con meno di due punti il Canvas mostra un
 placeholder testuale invece di una spezzata degenere.
 
-### 9.8 Nota hardware
+### 9.9 Nota hardware
 
 Vale quanto detto in §8.2: **ECHO emette 5 V e i GPIO del Pi tollerano 3.3 V**, quindi il
 partitore di tensione (R1 = 1 kΩ, R2 = 2 kΩ) è obbligatorio anche per questo secondo sensore.
@@ -917,7 +965,7 @@ I due HC-SR04 convivono senza conflitti perché usano pin distinti (`23/24` il s
 Modulo `sensors/spectrometer/mcari2_as7265x.py`. Misura lo stato di salute della pianta con
 il sensore **SparkFun Triad AS7265x** (18 canali, 410–940 nm, bus I2C).
 
-### 9.1 Import tollerante
+### 10.1 Import tollerante
 
 ```python
 try:
@@ -932,7 +980,7 @@ Il modulo resta importabile su un PC senza la libreria: le funzioni di **solo ca
 (`mcari2`, `compute_reflectance`, `evaluate_MCAR2`, `interpreta_mcari2`) restano usabili e
 testabili fuori dal Raspberry.
 
-### 9.2 Mappatura delle bande
+### 10.2 Mappatura delle bande
 
 MCARI2 richiede tre bande, mappate sui getter della libreria:
 
@@ -945,7 +993,7 @@ MCARI2 richiede tre bande, mappate sui getter della libreria:
 La mappatura sta in un unico posto (`GREEN_GETTER`/`RED_GETTER`/`NIR_GETTER`) e viene
 risolta con `getattr`. `CHANNEL_MAP` elenca tutti i 18 canali per la diagnostica.
 
-### 9.3 Il punto critico: riflettanza, non irradianza
+### 10.3 Il punto critico: riflettanza, non irradianza
 
 Il sensore restituisce **irradianza** (µW/cm²), che dipende anche dall'intensità della luce
 incidente; MCARI2 è invece definito sulla **riflettanza** (0–1). Serve quindi una taratura:
@@ -965,7 +1013,7 @@ INTEGRATION_CYCLES = 50    # tempo di integrazione ≈ valore × 2.8 ms
 SETTLE_TIME = 0.3          # assestamento del LED prima della misura [s]
 ```
 
-### 9.4 La formula MCARI2
+### 10.4 La formula MCARI2
 
 **MCARI2** (*Modified Chlorophyll Absorption in Reflectance Index 2*) stima clorofilla e LAI,
 ed è sensibile allo stress idrico/nutrizionale (in particolare la carenza di azoto).
@@ -987,7 +1035,7 @@ vegetazione sana (la clorofilla assorbe il rosso e riflette il vicino infrarosso
 sottrazione di `1.3·(NIR − GREEN)` corregge l'effetto della riflettanza nel verde.
 Il **denominatore** è il fattore di normalizzazione che riduce l'influenza del suolo di sfondo.
 
-### 9.5 Catena di elaborazione e interpretazione
+### 10.5 Catena di elaborazione e interpretazione
 
 ```
 init_sensor() -> calibrate() -> [JSON di taratura]
@@ -1305,7 +1353,38 @@ o `'Hlow'`. La condizione non è quindi mai vera e il **controllo di `time_max_o
 interviene**: il condizionatore non viene mai spento dal timeout di sicurezza, ma solo dal
 rientro di T o H sotto soglia. La lista sembra dover essere `('T_low_21', 'dry')`.
 
-### 17.6 Note minori
+### 17.6 La configurazione è caricata due volte, in due dizionari distinti
+
+`gui.py:37` e `helper_aeroGreenHouse.py:32`
+
+```python
+self.config = self.load_config()   # gui.py:37   -> dizionario A
+self.ah = aeroHelper()             # gui.py:48   -> dentro, dizionario B
+```
+
+Lo stesso `config.yaml` viene letto **due volte**, in due oggetti separati. `aeroHelper` passa
+il **suo** (B) a tutti i manager per riferimento, quindi i sei manager sono coerenti tra loro;
+ma la GUI usa A, e i due non comunicano. Conseguenze concrete:
+
+- **Le modifiche salvate dalla tab Configurazione non raggiungono i manager** finché il
+  processo non viene riavviato: la GUI scrive il file e aggiorna A, i manager continuano a
+  leggere B.
+- **Le modifiche ai job** (`gui.py:696/718/732` aggiungono, eliminano e modificano voci di
+  `gpio_pins` in A) non arrivano mai allo scheduler, che vive su B.
+- **Rischio di sovrascrittura**: `save_config()` riversa l'**intero** A. Chiunque scriva sul
+  file passando da B — come fa la calibrazione della crescita (§9.6) — vedrebbe il proprio
+  valore cancellato dal primo "Salva Configurazione". La calibrazione lo neutralizza
+  riallineando esplicitamente A e la StringVar, ma è una toppa sul sintomo.
+
+La cura strutturale sarebbe fare in modo che A e B siano **lo stesso oggetto** (`self.ah`
+costruito per primo, poi `self.config = self.ah.configs`) e che ogni ricarica **muti il
+dizionario sul posto** invece di riassegnarlo — `reload_config_tab:872` fa `self.config =
+self.load_config()`, che romperebbe l'aliasing al primo click su "Ricarica". Poiché i manager
+rileggono `self.configs` ad ogni uso, la mutazione sul posto darebbe l'aggiornamento a caldo
+quasi gratis; resterebbero fuori i valori catturati una volta sola (pin GPIO già configurati,
+intervalli già congelati negli `Scheduler`, i cinque attributi copiati da `IRController`).
+
+### 17.7 Note minori
 
 - `measure_distance_avg()` restituisce la mediana ma il nome e il parametro `n_samples`
   suggeriscono la media — il docstring lo chiarisce, il nome no. Da quando esiste anche
