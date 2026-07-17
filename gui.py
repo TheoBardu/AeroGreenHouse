@@ -9,6 +9,7 @@ import logging
 from queue import Queue
 
 from helper_aeroGreenHouse import aeroHelper
+from sensors.spectrometer import mcari2_as7265x as spectro
 
 
 class GUILoggingHandler(logging.Handler):
@@ -125,7 +126,17 @@ class AeroGreenHouseGUI:
         self.COL_ACCENT = "#388e3c"
         self.COL_OK = "#2e9e2e"     # spia verde
         self.COL_BAD = "#c62828"    # spia rossa
+        self.COL_WARN = "#b26a00"   # spia arancione
         self.COL_TEXT = "#1f2d27"
+
+        # Colore dello stato della pianta. Le chiavi sono quelle di
+        # classifica_mcari2: le soglie numeriche restano nel modulo del sensore.
+        self.MCARI2_COLORS = {
+            spectro.STATO_STRESS: self.COL_BAD,
+            spectro.STATO_LIMITE: self.COL_WARN,
+            spectro.STATO_SANA: self.COL_OK,
+            spectro.STATO_MOLTO_SANA: self.COL_HEADER,
+        }
 
         style = ttk.Style()
         try:
@@ -206,7 +217,12 @@ class AeroGreenHouseGUI:
         notebook.add(tank_frame, text="Livelli Serbatoio")
         self.create_tank_tab(tank_frame)
 
-        # Tab 7: Output/Log
+        # Tab 7: Spettrometro (MCARI2)
+        spectro_frame = ttk.Frame(notebook)
+        notebook.add(spectro_frame, text="Spettrometro")
+        self.create_spectro_tab(spectro_frame)
+
+        # Tab 8: Output/Log
         output_frame = ttk.Frame(notebook)
         notebook.add(output_frame, text="Output/Log")
         self.create_output_tab(output_frame)
@@ -217,10 +233,76 @@ class AeroGreenHouseGUI:
         self.root.after(1000, self._update_clock)
 
     # ------------------------------------------------------------------
+    # Contenitore scrollabile (per le tab piu' alte della finestra)
+    # ------------------------------------------------------------------
+    def _make_scrollable(self, parent):
+        """
+        Crea dentro `parent` un'area verticale scrollabile.
+
+        Tkinter non sa scrollare un Frame: serve un Canvas che ospiti il
+        contenuto in una finestra interna. Il chiamante costruisce i widget nel
+        frame restituito e, a costruzione finita, chiama _bind_mousewheel.
+
+        :return: (frame in cui costruire i widget, canvas che lo scrolla)
+        """
+        canvas = tk.Canvas(parent, bg=self.COL_BG, highlightthickness=0)
+        vbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        inner = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=inner, anchor='nw')
+
+        # L'area scrollabile segue l'altezza effettiva del contenuto
+        inner.bind('<Configure>',
+                   lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        # ...e la larghezza del canvas, cosi' i frame interni riempiono la tab
+        canvas.bind('<Configure>',
+                    lambda e: canvas.itemconfigure(window, width=e.width))
+
+        return inner, canvas
+
+    def _bind_mousewheel(self, widget, canvas):
+        """
+        Abilita la rotella del mouse su `widget` e su tutti i suoi discendenti.
+
+        Va chiamata a costruzione finita (i binding sono per-widget: quelli
+        creati dopo non li erediterebbero). Si evita bind_all perche' ruberebbe
+        la rotella alle altre tab.
+        """
+        def _on_wheel(event):
+            if event.num == 4:      # Linux / Raspberry Pi: rotella su
+                delta = -1
+            elif event.num == 5:    # Linux / Raspberry Pi: rotella giu'
+                delta = 1
+            else:                   # Windows / macOS
+                delta = -1 if event.delta > 0 else 1
+            canvas.yview_scroll(delta, 'units')
+            # Blocca il binding di classe: sopra una Combobox la rotella
+            # scrolla la pagina invece di cambiarne il valore.
+            return 'break'
+
+        def _bind(w):
+            w.bind('<MouseWheel>', _on_wheel)   # Windows / macOS
+            w.bind('<Button-4>', _on_wheel)     # X11 (Raspberry Pi)
+            w.bind('<Button-5>', _on_wheel)
+            for child in w.winfo_children():
+                _bind(child)
+
+        _bind(widget)
+        _bind(canvas)
+
+    # ------------------------------------------------------------------
     # Tab: Configurazione
     # ------------------------------------------------------------------
     def create_config_tab(self, parent):
         """Tab per modificare la configurazione"""
+        # Il contenuto e' piu' alto della finestra: va reso scrollabile.
+        # Da qui in poi `parent` e' l'area interna scrollabile.
+        parent, config_canvas = self._make_scrollable(parent)
+
         # Frame per T_var
         t_frame = ttk.LabelFrame(parent, text="Variabili Temperatura", padding=10)
         t_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -311,6 +393,26 @@ class AeroGreenHouseGUI:
         self.tank_nsamples_var = tk.StringVar(value=str(tank.get('n_samples', 5)))
         ttk.Entry(tank_cfg_frame, textvariable=self.tank_nsamples_var, width=10).grid(row=3, column=3, sticky=tk.W)
 
+        # Frame per Spettrometro (Spectro)
+        spectro_cfg_frame = ttk.LabelFrame(parent, text="Spettrometro (AS7265x) — indice MCARI2", padding=10)
+        spectro_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        sp = self.config.get('spectro', {})
+
+        ttk.Label(spectro_cfg_frame, text="Intervallo lettura (s):").grid(row=0, column=0, sticky=tk.W)
+        self.spectro_interval_var = tk.StringVar(value=str(sp.get('read_interval', 3600)))
+        ttk.Entry(spectro_cfg_frame, textvariable=self.spectro_interval_var, width=10).grid(row=0, column=1, sticky=tk.W)
+
+        ttk.Label(spectro_cfg_frame, text="N. misure nello storico:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
+        self.spectro_history_var = tk.StringVar(value=str(sp.get('history_len', 10)))
+        ttk.Entry(spectro_cfg_frame, textvariable=self.spectro_history_var, width=10).grid(row=0, column=3, sticky=tk.W)
+
+        ttk.Label(spectro_cfg_frame, text="Directory dati:").grid(row=1, column=0, sticky=tk.W)
+        self.spectro_dir_var = tk.StringVar(
+            value=sp.get('saving_dir', '/home/fishnplants/Desktop/data/SPECTRO/'))
+        ttk.Entry(spectro_cfg_frame, textvariable=self.spectro_dir_var, width=50).grid(
+            row=1, column=1, columnspan=3, sticky=tk.EW)
+
         # Frame per Log
         log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
         log_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -344,6 +446,9 @@ class AeroGreenHouseGUI:
         ttk.Button(btn_frame, text="Salva Configurazione", style='Accent.TButton',
                    command=self.save_config_changes).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Ricarica", command=self.reload_config_tab).pack(side=tk.LEFT, padx=5)
+
+        # Rotella del mouse: da fare per ultimo, quando i widget esistono tutti
+        self._bind_mousewheel(parent, config_canvas)
 
     # ------------------------------------------------------------------
     # Tab: Processi Attivi
@@ -387,6 +492,7 @@ class AeroGreenHouseGUI:
         states.append(("Lettura Ambient (T/H)", self.ah.ambient.is_running()))
         states.append(("Controllo Climatizzatore", self.ah.climate.is_running()))
         states.append(("Lettura Serbatoio", self.ah.tank.is_running()))
+        states.append(("Lettura Spettrometro", self.ah.spectro.is_running()))
         return states
 
     def _rebuild_status_rows(self, keys):
@@ -745,6 +851,12 @@ class AeroGreenHouseGUI:
             self.config['tank']['read_interval'] = int(self.tank_interval_var.get())
             self.config['tank']['n_samples'] = int(self.tank_nsamples_var.get())
 
+            # Sezione spettrometro (spectro)
+            self.config.setdefault('spectro', {})
+            self.config['spectro']['read_interval'] = int(self.spectro_interval_var.get())
+            self.config['spectro']['history_len'] = int(self.spectro_history_var.get())
+            self.config['spectro']['saving_dir'] = self.spectro_dir_var.get()
+
             self.save_config()
         except ValueError:
             messagebox.showerror("Errore", "Inserire valori validi. Verificare i numeri.")
@@ -776,6 +888,11 @@ class AeroGreenHouseGUI:
         self.tank_low_var.set(str(tank.get('water_low_threshold_l', 3.0)))
         self.tank_interval_var.set(str(tank.get('read_interval', 300)))
         self.tank_nsamples_var.set(str(tank.get('n_samples', 5)))
+
+        sp = self.config.get('spectro', {})
+        self.spectro_interval_var.set(str(sp.get('read_interval', 3600)))
+        self.spectro_history_var.set(str(sp.get('history_len', 10)))
+        self.spectro_dir_var.set(sp.get('saving_dir', '/home/fishnplants/Desktop/data/SPECTRO/'))
 
         messagebox.showinfo("Successo", "Configurazione ricaricata!")
 
@@ -1156,6 +1273,171 @@ class AeroGreenHouseGUI:
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nella lettura serbatoio: {str(e)}")
             self.ah.logger.error(f"Errore lettura TANK: {str(e)}")
+
+
+    # ------------------------------------------------------------------
+    # Tab: Spettrometro / MCARI2 (wrapper sottili → SpectroManager)
+    # ------------------------------------------------------------------
+    def create_spectro_tab(self, parent):
+        """Tab per monitorare l'indice di vegetazione MCARI2 e lo stato della pianta."""
+        # Frame superiore con bottoni
+        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="🔬 Misura Adesso", command=self.read_spectro_now).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="▶️ Attiva Lettura", style='Accent.TButton',
+                   command=self.start_spectro_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="⏹️ Arresta Lettura", style='Stop.TButton',
+                   command=self.stop_spectro_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="⚪ Taratura (rif. bianco)",
+                   command=self.calibrate_spectro).pack(side=tk.LEFT, padx=5)
+
+        # Frame principale per i dati
+        main_frame = ttk.LabelFrame(parent, text="INDICE MCARI2", padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        inner = ttk.Frame(main_frame)
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        # Valore dell'indice (valore principale)
+        val_frame = ttk.Frame(inner)
+        val_frame.pack(pady=5)
+        ttk.Label(val_frame, text="MCARI2", font=('Arial', 16, 'bold')).pack()
+        self.spectro_value_label = ttk.Label(val_frame, text="--", font=('Arial', 28, 'bold'),
+                                             foreground='#207abb')
+        self.spectro_value_label.pack()
+
+        # Indicatore dello stato della pianta (spia + testo)
+        state_frame = ttk.Frame(inner)
+        state_frame.pack(pady=10)
+        self.spectro_canvas = tk.Canvas(state_frame, width=28, height=28,
+                                        highlightthickness=0, bg=self.COL_BG)
+        self.spectro_canvas.pack(side=tk.LEFT, padx=(0, 10))
+        self.spectro_oval = self.spectro_canvas.create_oval(4, 4, 24, 24,
+                                                            fill='gray', outline="#555555")
+        self.spectro_state_label = ttk.Label(state_frame, text="Nessuna misura disponibile",
+                                             font=('Arial', 14, 'bold'), foreground='gray')
+        self.spectro_state_label.pack(side=tk.LEFT)
+
+        # Timestamp della lettura
+        self.spectro_timestamp_label = ttk.Label(inner, text="Ultimo aggiornamento: --",
+                                                 font=('Arial', 12, 'italic'), foreground='gray')
+        self.spectro_timestamp_label.pack(pady=5)
+
+        # Storico delle misure
+        hist_frame = ttk.LabelFrame(inner, text="Storico Misure", padding=5)
+        hist_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        columns = ('Data/Ora', 'MCARI2', 'Stato')
+        self.spectro_tree = ttk.Treeview(hist_frame, columns=columns, show='headings', height=8)
+        for col, width in (('Data/Ora', 150), ('MCARI2', 80), ('Stato', 420)):
+            self.spectro_tree.heading(col, text=col)
+            self.spectro_tree.column(col, width=width)
+
+        scrollbar = ttk.Scrollbar(hist_frame, orient=tk.VERTICAL, command=self.spectro_tree.yview)
+        self.spectro_tree.configure(yscroll=scrollbar.set)
+
+        self.spectro_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Colore delle righe in base allo stato della pianta
+        for stato, color in self.MCARI2_COLORS.items():
+            self.spectro_tree.tag_configure(stato, foreground=color)
+
+        # Popola con lo storico gia' letto dai file all'avvio
+        self._refresh_spectro_history()
+
+    def _refresh_spectro_history(self):
+        """Ripopola la tabella dello storico dalle misure del SpectroManager."""
+        for item in self.spectro_tree.get_children():
+            self.spectro_tree.delete(item)
+
+        for entry in self.ah.spectro.history:
+            self.spectro_tree.insert('', 'end', tags=(entry['stato'],), values=(
+                entry['timestamp'], f"{entry['mcari2']:.4f}", entry['testo']
+            ))
+
+    def _update_spectro_labels(self, result):
+        """Aggiorna valore, spia e storico (chiamata via root.after dal thread di lettura)."""
+        color = self.MCARI2_COLORS.get(result['stato'], 'gray')
+        self.spectro_value_label.config(text=f"{result['mcari2']:.4f}", foreground=color)
+        self.spectro_canvas.itemconfig(self.spectro_oval, fill=color)
+        self.spectro_state_label.config(text=result['testo'], foreground=color)
+        self.spectro_timestamp_label.config(text=f"Ultimo aggiornamento: {result['timestamp']}")
+        self._refresh_spectro_history()
+
+    def start_spectro_reading(self):
+        """Avvia la lettura temporizzata dell'MCARI2 (SpectroManager)."""
+        if not self._check_spectro_calibration():
+            return
+
+        def on_update(result):
+            self.root.after(0, lambda r=result: self._update_spectro_labels(r))
+
+        started = self.ah.spectro.start_reading(on_update=on_update)
+        if not started:
+            messagebox.showwarning("Avviso", "Lettura spettrometro già in corso!")
+
+    def stop_spectro_reading(self):
+        """Arresta immediatamente la lettura dell'MCARI2."""
+        stopped = self.ah.spectro.stop_reading()
+        if not stopped:
+            messagebox.showwarning("Avviso", "Nessuna lettura spettrometro in corso")
+            return
+        messagebox.showinfo("Successo", "Lettura spettrometro arrestata!")
+
+    def _check_spectro_calibration(self):
+        """True se esiste una taratura; altrimenti avvisa e indirizza alla taratura."""
+        if self.ah.spectro.has_calibration():
+            return True
+        messagebox.showwarning(
+            "Taratura mancante",
+            "Nessuna taratura trovata.\n\n"
+            "L'MCARI2 si calcola sulla riflettanza, quindi serve prima una misura "
+            "del riferimento bianco: puntare il sensore sul pannello bianco e "
+            "premere '⚪ Taratura (rif. bianco)'."
+        )
+        return False
+
+    def read_spectro_now(self):
+        """Legge immediatamente l'indice MCARI2 (SpectroManager)."""
+        if not self._check_spectro_calibration():
+            return
+
+        try:
+            result = self.ah.spectro.read_now()
+            self._update_spectro_labels(result)
+            messagebox.showinfo(
+                "Successo",
+                f"MCARI2: {result['mcari2']:.4f}\n"
+                f"Stato: {result['testo']}"
+            )
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella lettura spettrometro: {str(e)}")
+            self.ah.logger.error(f"Errore lettura SPECTRO: {str(e)}")
+
+    def calibrate_spectro(self):
+        """Esegue la taratura sul riferimento bianco (SpectroManager)."""
+        if not messagebox.askyesno(
+            "Taratura",
+            "Puntare il sensore sul pannello bianco di riferimento.\n\n"
+            "La misura verrà eseguita con il LED bianco integrato acceso e "
+            "sostituirà la taratura precedente.\n\nProcedere?"
+        ):
+            return
+
+        try:
+            reference = self.ah.spectro.calibrate()
+            messagebox.showinfo(
+                "Successo",
+                "Taratura completata.\nRiferimento bianco:\n"
+                f"GREEN (560nm): {reference[spectro.GREEN_NM]:.2f}\n"
+                f"RED   (680nm): {reference[spectro.RED_NM]:.2f}\n"
+                f"NIR   (810nm): {reference[spectro.NIR_NM]:.2f}"
+            )
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella taratura: {str(e)}")
+            self.ah.logger.error(f"Errore taratura SPECTRO: {str(e)}")
 
 
 if __name__ == "__main__":

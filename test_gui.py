@@ -10,8 +10,11 @@ Cosa fa:
     in modo che import e inizializzazioni non falliscano.
   - Reindirizza le cartelle di log/salvataggio dati in una cartella locale
     (./_gui_test_data) cosi' il logging funziona anche su Mac/Windows.
-  - Inietta letture sensori SIMULATE (temperatura, umidita', livello serbatoio)
-    cosi' le tab Ambient e Livelli Serbatoio mostrano valori realistici.
+  - Inietta letture sensori SIMULATE (temperatura, umidita', livello serbatoio,
+    spettro AS7265x) cosi' le tab Ambient, Livelli Serbatoio e Spettrometro
+    mostrano valori realistici.
+  - Semina una taratura e uno storico MCARI2 di esempio, cosi' la tab
+    Spettrometro e' gia' popolata al primo avvio.
   - Rende l'invio dei comandi IR e l'upload web delle no-op (nessun effetto reale).
   - Avvia la vera GUI (gui.AeroGreenHouseGUI).
 
@@ -24,8 +27,10 @@ Uso:
 
 import os
 import sys
+import json
 import types
 import random
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(HERE)
@@ -34,6 +39,15 @@ sys.path.insert(0, HERE)
 # Cartella locale scrivibile per log e dati simulati
 TEST_DATA_DIR = os.path.join(HERE, '_gui_test_data')
 os.makedirs(TEST_DATA_DIR, exist_ok=True)
+
+# Dati dello spettrometro (taratura + file giornalieri SPECTRO_*.txt)
+SPECTRO_DIR = os.path.join(TEST_DATA_DIR, 'SPECTRO')
+os.makedirs(SPECTRO_DIR, exist_ok=True)
+
+# Valore del riferimento bianco simulato su ogni banda: i getter del sensore
+# finto restituiscono riflettanza * WHITE_REF, cosi' la riflettanza calcolata
+# dal modulo e' esattamente quella voluta.
+WHITE_REF = 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -46,10 +60,18 @@ class _SimState:
     humidity = 60.0  # %
     distance = 15.0  # cm (distanza sensore-acqua)
 
+    # Riflettanza delle tre bande MCARI2. Con green=0.15, red=0.05, nir=0.60
+    # l'indice vale ~0.87 ("coltura sana"); facendo camminare il NIR
+    # nell'intervallo sotto, l'indice attraversa tutte e quattro le fasce e la
+    # spia di stato cambia colore durante l'ispezione.
+    r_green = 0.15
+    r_red = 0.05
+    r_nir = 0.60
 
-def _walk(value, lo, hi, step):
+
+def _walk(value, lo, hi, step, ndigits=1):
     value += random.uniform(-step, step)
-    return round(max(lo, min(hi, value)), 1)
+    return round(max(lo, min(hi, value)), ndigits)
 
 
 def _install_hardware_stubs():
@@ -96,6 +118,43 @@ def _install_hardware_stubs():
     board.__getattr__ = lambda name: 'PIN_' + name  # PEP 562
     sys.modules['board'] = board
 
+    # ---- qwiic_as7265x (sensore spettrale) ----
+    # Va registrato PRIMA che venga importato mcari2_as7265x: quel modulo fissa
+    # _HW_AVAILABLE a import-time e senza questo stub init_sensor() solleverebbe
+    # RuntimeError, rendendo la tab Spettrometro inutilizzabile in simulazione.
+    class _QwiicAS7265x:
+        # Riflettanza simulata per le lettere dei canali usati dalla formula
+        # MCARI2 (g=560nm GREEN, s=680nm RED, v=810nm NIR).
+        def is_connected(self): return True
+        def begin(self): return True
+        def set_gain(self, *a, **k): pass
+        def set_integration_cycles(self, *a, **k): pass
+        def disable_indicator(self, *a, **k): pass
+        def enable_bulb(self, *a, **k): pass
+        def disable_bulb(self, *a, **k): pass
+
+        def take_measurements(self):
+            # Nuova misura: solo il NIR cammina, come farebbe una pianta che
+            # cambia stato lentamente mantenendo green/red piu' stabili.
+            _SimState.r_nir = _walk(_SimState.r_nir, 0.35, 0.75, 0.06, ndigits=3)
+            _SimState.r_green = _walk(_SimState.r_green, 0.12, 0.18, 0.01, ndigits=3)
+            _SimState.r_red = _walk(_SimState.r_red, 0.03, 0.08, 0.01, ndigits=3)
+
+        def __getattr__(self, name):
+            # get_calibrated_<lettera> per tutti i 18 canali: le tre bande della
+            # formula tornano il valore simulato, le altre un valore plausibile.
+            if not name.startswith('get_calibrated_'):
+                raise AttributeError(name)
+            letter = name[len('get_calibrated_'):]
+            refl = {'g': _SimState.r_green, 's': _SimState.r_red, 'v': _SimState.r_nir}
+            return lambda: refl.get(letter, 0.20) * WHITE_REF
+
+    qwiic = types.ModuleType('qwiic_as7265x')
+    qwiic.QwiicAS7265x = _QwiicAS7265x
+    qwiic.kGain16x = 2
+    qwiic.kLedWhite = 0
+    sys.modules['qwiic_as7265x'] = qwiic
+
 
 _install_hardware_stubs()
 
@@ -106,7 +165,49 @@ _install_hardware_stubs()
 import yaml
 import helper_aeroGreenHouse as H
 import ir_controller.ir_controller as ir_controller
-from ultrasonic_sensor import ultrasonic_measurement as TM
+from sensors.ultrasonic_sensor import ultrasonic_measurement as TM
+from sensors.spectrometer import mcari2_as7265x as SP
+
+
+def _seed_spectro_data():
+    """
+    Semina taratura e storico MCARI2 di esempio in SPECTRO_DIR.
+
+    Senza taratura la tab Spettrometro non potrebbe misurare (l'MCARI2 si calcola
+    sulla riflettanza) e senza file giornalieri lo storico partirebbe vuoto.
+    """
+    # Taratura: gain e cicli devono coincidere con quelli del modulo, altrimenti
+    # load_calibration stampa un avviso di mismatch.
+    calib = {
+        "reference": {"560": WHITE_REF, "680": WHITE_REF, "810": WHITE_REF},
+        "gain": SP.GAIN,
+        "integration_cycles": SP.INTEGRATION_CYCLES,
+        "timestamp": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+    }
+    with open(os.path.join(SPECTRO_DIR, SP.CALIB_NAME), 'w') as f:
+        json.dump(calib, f, indent=2)
+
+    # Storico: un valore per fascia (stress / limite / sana / molto sana) su
+    # giorni diversi, cosi' la tabella mostra subito tutti e quattro i colori.
+    mock = [(4, 0.3100), (3, 0.5200), (2, 0.7400), (1, 0.9300)]
+
+    for days_ago, index in mock:
+        day = datetime.now() - timedelta(days=days_ago)
+        file_path = os.path.join(SPECTRO_DIR, day.strftime(SP.FILE_FORMAT))
+        if os.path.exists(file_path):
+            continue  # gia' seminato in un avvio precedente
+
+        # Riflettanze coerenti col valore: servono solo a riempire le colonne.
+        r_green, r_red, r_nir = 0.15, 0.05, 0.30 + index * 0.35
+        with open(file_path, 'w') as f:
+            f.write("datetime\t\t\t green_raw\t red_raw\t nir_raw\t "
+                    "R_green\t R_red\t R_nir\t MCARI2\n")
+            f.write(f"{day.strftime('%Y/%m/%d %H:%M:%S')}\t"
+                    f"{r_green * WHITE_REF:.2f}\t{r_red * WHITE_REF:.2f}\t{r_nir * WHITE_REF:.2f}\t"
+                    f"{r_green:.4f}\t{r_red:.4f}\t{r_nir:.4f}\t{index:.4f}\n")
+
+
+_seed_spectro_data()
 
 
 def _patched_load_config(self, file_name):
@@ -118,11 +219,13 @@ def _patched_load_config(self, file_name):
     cfg.setdefault('log', {})['directory'] = TEST_DATA_DIR
     cfg.setdefault('dht22', {})['saving_dir'] = TEST_DATA_DIR + sep
     cfg.setdefault('tank', {})['saving_dir'] = TEST_DATA_DIR + sep
+    cfg.setdefault('spectro', {})['saving_dir'] = SPECTRO_DIR
 
     # Intervalli brevi per vedere subito gli aggiornamenti durante l'ispezione
     cfg['dht22']['read_interval'] = 3
     cfg['tank']['read_interval'] = 3
     cfg['tank']['n_samples'] = 1
+    cfg['spectro']['read_interval'] = 3
     return cfg
 
 

@@ -25,6 +25,10 @@ gpio_pins:
 - name: MOISTURE
   pin: 26
   what_type: sensor
+spectro:
+  read_interval: 3600
+  saving_dir: /home/fishnplants/Desktop/data/SPECTRO/
+  history_len: 10
 ir_control:
   rx_pin: 20
   tx_pin: 21
