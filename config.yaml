@@ -29,6 +29,16 @@ spectro:
   read_interval: 3600
   saving_dir: /home/fishnplants/Desktop/data/SPECTRO/
   history_len: 10
+plant_growth:
+  trig_pin: 5
+  echo_pin: 6
+  read_interval_days: 1
+  n_samples: 3
+  reference_height_cm: 70.0
+  decimals: 1
+  save: true
+  saving_dir: /home/fishnplants/Desktop/data/GROWTH/
+  history_len: 30
 ir_control:
   rx_pin: 20
   tx_pin: 21

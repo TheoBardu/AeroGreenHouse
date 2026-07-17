@@ -3,3 +3,4 @@ from managers_classes.ambient_manager import AmbientManager
 from managers_classes.climate_manager import ClimateManager
 from managers_classes.tank_manager import TankManager
 from managers_classes.spectro_manager import SpectroManager
+from managers_classes.plant_growth import PlantGrowthManager

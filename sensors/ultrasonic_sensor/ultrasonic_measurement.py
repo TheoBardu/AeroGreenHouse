@@ -192,6 +192,44 @@ def measure_distance_avg(trig_pin: int, echo_pin: int,
     return readings[mid]  # mediana
 
 
+def measure_distance_mean(trig_pin: int, echo_pin: int,
+                          n_samples: int = 3, delay: float = 0.065) -> float:
+    """
+    Esegue N misure e restituisce la media aritmetica delle letture valide.
+
+    Rispetto a measure_distance_avg (mediana, robusta agli outlier su una
+    superficie d'acqua mossa), la media è adatta a un bersaglio fermo come
+    la sommità di una pianta, dove il rumore è simmetrico.
+
+    Il datasheet HC-SR04 raccomanda almeno 60 ms tra una misura e l'altra
+    per evitare interferenze tra impulsi successivi.
+
+    Args:
+        trig_pin: pin GPIO del trigger
+        echo_pin: pin GPIO dell'echo
+        n_samples: numero di misure da mediare
+        delay: attesa tra misure [s] (>= 0.060 raccomandato)
+
+    Returns:
+        Distanza media in cm, oppure -1 se tutte le misure falliscono.
+
+    Reference:
+        https://www.handsontec.com/dataspecs/HC-SR04-Ultrasonic.pdf
+        "Suggest to use over 60ms measurement cycle"
+    """
+    readings = []
+    for _ in range(n_samples):
+        d = measure_distance_cm(trig_pin, echo_pin)
+        if d > 0:
+            readings.append(d)
+        time.sleep(delay)
+
+    if not readings:
+        return -1.0
+
+    return sum(readings) / len(readings)
+
+
 def distance_to_water_volume(
         distance_cm: float,
         tank_height_cm: float,

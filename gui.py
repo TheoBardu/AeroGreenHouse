@@ -222,7 +222,12 @@ class AeroGreenHouseGUI:
         notebook.add(spectro_frame, text="Spettrometro")
         self.create_spectro_tab(spectro_frame)
 
-        # Tab 8: Output/Log
+        # Tab 8: Crescita (altezza pianta)
+        growth_frame = ttk.Frame(notebook)
+        notebook.add(growth_frame, text="Crescita")
+        self.create_growth_tab(growth_frame)
+
+        # Tab 9: Output/Log
         output_frame = ttk.Frame(notebook)
         notebook.add(output_frame, text="Output/Log")
         self.create_output_tab(output_frame)
@@ -493,6 +498,7 @@ class AeroGreenHouseGUI:
         states.append(("Controllo Climatizzatore", self.ah.climate.is_running()))
         states.append(("Lettura Serbatoio", self.ah.tank.is_running()))
         states.append(("Lettura Spettrometro", self.ah.spectro.is_running()))
+        states.append(("Misura Crescita", self.ah.plant_growth.is_running()))
         return states
 
     def _rebuild_status_rows(self, keys):
@@ -1438,6 +1444,209 @@ class AeroGreenHouseGUI:
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nella taratura: {str(e)}")
             self.ah.logger.error(f"Errore taratura SPECTRO: {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Tab: Crescita (wrapper sottili → PlantGrowthManager)
+    # ------------------------------------------------------------------
+    def create_growth_tab(self, parent):
+        """Tab per monitorare l'altezza della pianta misurata dal sensore ultrasonico."""
+        # Frame superiore con bottoni
+        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="📏 Misura Adesso", command=self.read_growth_now).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="▶️ Attiva Lettura", style='Accent.TButton',
+                   command=self.start_growth_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="⏹️ Arresta Lettura", style='Stop.TButton',
+                   command=self.stop_growth_reading).pack(side=tk.LEFT, padx=5)
+
+        # Frame principale per i dati
+        main_frame = ttk.LabelFrame(parent, text="ALTEZZA PIANTA", padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        inner = ttk.Frame(main_frame)
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        # Altezza dell'ultima misura (valore principale)
+        val_frame = ttk.Frame(inner)
+        val_frame.pack(pady=5)
+        ttk.Label(val_frame, text="h_plant", font=('Arial', 16, 'bold')).pack()
+        self.growth_value_label = ttk.Label(val_frame, text="--", font=('Arial', 28, 'bold'),
+                                            foreground=self.COL_PRIMARY)
+        self.growth_value_label.pack()
+
+        # Timestamp della lettura
+        self.growth_timestamp_label = ttk.Label(inner, text="Ultima misurazione: --",
+                                                font=('Arial', 12, 'italic'), foreground='gray')
+        self.growth_timestamp_label.pack(pady=5)
+
+        # Andamento nel tempo: Canvas nativo (nessuna dipendenza da matplotlib,
+        # i punti sono pochi perche' la misura e' ogni N giorni)
+        chart_frame = ttk.LabelFrame(inner, text="Andamento nel tempo", padding=5)
+        chart_frame.pack(fill=tk.X, pady=10)
+        self.growth_canvas = tk.Canvas(chart_frame, height=180, highlightthickness=0,
+                                       bg='white')
+        self.growth_canvas.pack(fill=tk.X, expand=True)
+        self.growth_canvas.bind('<Configure>', lambda e: self._draw_growth_chart())
+
+        # Storico delle misure
+        hist_frame = ttk.LabelFrame(inner, text="Storico Misure", padding=5)
+        hist_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        columns = ('Data/Ora', 'Altezza (cm)')
+        self.growth_tree = ttk.Treeview(hist_frame, columns=columns, show='headings', height=6)
+        for col, width in (('Data/Ora', 200), ('Altezza (cm)', 120)):
+            self.growth_tree.heading(col, text=col)
+            self.growth_tree.column(col, width=width)
+
+        scrollbar = ttk.Scrollbar(hist_frame, orient=tk.VERTICAL, command=self.growth_tree.yview)
+        self.growth_tree.configure(yscroll=scrollbar.set)
+
+        self.growth_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Popola con lo storico gia' letto dal file GROWTH.csv all'avvio
+        self._refresh_growth_history()
+        self._show_last_growth()
+
+    def _show_last_growth(self):
+        """Mostra l'ultima misura disponibile (da file o da lettura) nelle label."""
+        history = self.ah.plant_growth.history
+        if not history:
+            return
+        last = history[-1]
+        self.growth_value_label.config(text=f"{last['h_plant_cm']:.1f} cm")
+        self.growth_timestamp_label.config(text=f"Ultima misurazione: {last['timestamp']}")
+
+    def _refresh_growth_history(self):
+        """Ripopola la tabella dello storico (misure piu' recenti in cima)."""
+        for item in self.growth_tree.get_children():
+            self.growth_tree.delete(item)
+
+        for entry in reversed(self.ah.plant_growth.history):
+            self.growth_tree.insert('', 'end', values=(
+                entry['timestamp'], f"{entry['h_plant_cm']:.1f}"
+            ))
+
+    def _draw_growth_chart(self):
+        """
+        Disegna l'andamento dell'altezza pianta sul Canvas.
+
+        Scelta deliberata di non usare matplotlib: sul Raspberry Pi Zero W
+        costerebbe ~2-4s di import e decine di MB di RAM residenti, mentre qui
+        i punti sono al massimo history_len e le primitive Tk bastano.
+        """
+        canvas = self.growth_canvas
+        canvas.delete('all')
+
+        w = canvas.winfo_width()
+        h = canvas.winfo_height()
+        if w <= 1 or h <= 1:  # Canvas non ancora disegnato
+            return
+
+        history = self.ah.plant_growth.history
+        if len(history) < 2:
+            canvas.create_text(w // 2, h // 2, text="Servono almeno due misure per l'andamento",
+                               fill='gray', font=('Arial', 11, 'italic'))
+            return
+
+        # Area di disegno (margini per le etichette)
+        pad_l, pad_r, pad_t, pad_b = 45, 12, 12, 26
+        x0, x1 = pad_l, w - pad_r
+        y0, y1 = pad_t, h - pad_b
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        heights = [e['h_plant_cm'] for e in history]
+        h_min, h_max = min(heights), max(heights)
+        if h_max == h_min:  # Serie piatta: evita la divisione per zero
+            h_min, h_max = h_min - 1.0, h_max + 1.0
+
+        # Assi
+        canvas.create_line(x0, y0, x0, y1, fill='#999999')
+        canvas.create_line(x0, y1, x1, y1, fill='#999999')
+
+        # Etichette in cm (min, medio, max)
+        for frac in (0.0, 0.5, 1.0):
+            value = h_min + (h_max - h_min) * frac
+            y = y1 - (y1 - y0) * frac
+            canvas.create_text(x0 - 5, y, text=f"{value:.1f}", anchor=tk.E,
+                               fill='#666666', font=('Arial', 8))
+            if frac > 0:  # Griglia orizzontale leggera
+                canvas.create_line(x0, y, x1, y, fill='#e4e4e4')
+
+        # Punti della spezzata
+        step = (x1 - x0) / (len(history) - 1)
+        points = []
+        for i, entry in enumerate(history):
+            x = x0 + step * i
+            y = y1 - (y1 - y0) * (entry['h_plant_cm'] - h_min) / (h_max - h_min)
+            points.extend((x, y))
+
+        canvas.create_line(*points, fill=self.COL_PRIMARY, width=2, smooth=False)
+        for i in range(0, len(points), 2):
+            x, y = points[i], points[i + 1]
+            canvas.create_oval(x - 2, y - 2, x + 2, y + 2,
+                               fill=self.COL_PRIMARY, outline=self.COL_PRIMARY)
+
+        # Date di inizio e fine serie
+        canvas.create_text(x0, y1 + 12, text=self._short_date(history[0]['timestamp']),
+                           anchor=tk.W, fill='#666666', font=('Arial', 8))
+        canvas.create_text(x1, y1 + 12, text=self._short_date(history[-1]['timestamp']),
+                           anchor=tk.E, fill='#666666', font=('Arial', 8))
+
+    def _short_date(self, timestamp):
+        """Riduce un timestamp 'YYYY/mm/dd HH:MM:SS' a 'dd/mm' per le etichette del grafico."""
+        try:
+            return datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S").strftime("%d/%m")
+        except ValueError:
+            return timestamp
+
+    def _update_growth_labels(self, result):
+        """Aggiorna valore, grafico e storico (chiamata via root.after dal thread di misura)."""
+        self.growth_value_label.config(text=f"{result['h_plant_cm']:.1f} cm")
+        self.growth_timestamp_label.config(text=f"Ultima misurazione: {result['timestamp']}")
+        self._refresh_growth_history()
+        self._draw_growth_chart()
+
+    def start_growth_reading(self):
+        """Avvia la misura temporizzata dell'altezza pianta (PlantGrowthManager)."""
+        def on_update(result):
+            self.root.after(0, lambda r=result: self._update_growth_labels(r))
+
+        started = self.ah.plant_growth.start_reading(on_update=on_update)
+        if not started:
+            messagebox.showwarning("Avviso", "Misura crescita già in corso!")
+
+    def stop_growth_reading(self):
+        """Arresta immediatamente la misura dell'altezza pianta."""
+        stopped = self.ah.plant_growth.stop_reading()
+        if not stopped:
+            messagebox.showwarning("Avviso", "Nessuna misura crescita in corso")
+            return
+        messagebox.showinfo("Successo", "Misura crescita arrestata!")
+
+    def read_growth_now(self):
+        """Misura immediatamente l'altezza della pianta (PlantGrowthManager)."""
+        try:
+            result = self.ah.plant_growth.read_now()
+            if result is None:
+                messagebox.showwarning(
+                    "Misura non valida",
+                    "Il sensore non ha restituito una misura valida.\n\n"
+                    "Verificare il posizionamento e il cablaggio del sensore."
+                )
+                return
+
+            self._update_growth_labels(result)
+            messagebox.showinfo(
+                "Successo",
+                f"Altezza pianta: {result['h_plant_cm']:.1f} cm\n"
+                f"Distanza misurata: {result['distance_cm']:.1f} cm"
+            )
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella misura crescita: {str(e)}")
+            self.ah.logger.error(f"Errore misura GROWTH: {str(e)}")
 
 
 if __name__ == "__main__":

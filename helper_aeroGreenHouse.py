@@ -8,6 +8,7 @@ from managers_classes.ambient_manager import AmbientManager
 from managers_classes.climate_manager import ClimateManager
 from managers_classes.tank_manager import TankManager
 from managers_classes.spectro_manager import SpectroManager
+from managers_classes.plant_growth import PlantGrowthManager
 
 
 # =====================================================================
@@ -18,8 +19,8 @@ class aeroHelper():
     '''
     Coordinatore per aeroGreenHouse: carica la configurazione, configura il
     logging, inizializza la GPIO una sola volta e istanzia i manager di
-    categoria (jobs, ambient, climate, tank, spectro), condividendo
-    configs/logger/gpios.
+    categoria (jobs, ambient, climate, tank, spectro, plant_growth),
+    condividendo configs/logger/gpios.
     '''
 
     def __init__(self):
@@ -55,6 +56,7 @@ class aeroHelper():
         self.climate = ClimateManager(self.configs, self.logger, self.ambient)
         self.tank = TankManager(self.configs, self.logger)
         self.spectro = SpectroManager(self.configs, self.logger)
+        self.plant_growth = PlantGrowthManager(self.configs, self.logger)
 
         # ---- Backward-compat: alias usati da main.py (nessun cambio di logica) ----
         self.runner = self.jobs.runner

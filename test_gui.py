@@ -44,6 +44,10 @@ os.makedirs(TEST_DATA_DIR, exist_ok=True)
 SPECTRO_DIR = os.path.join(TEST_DATA_DIR, 'SPECTRO')
 os.makedirs(SPECTRO_DIR, exist_ok=True)
 
+# Dati di crescita (file cumulativo GROWTH.csv)
+GROWTH_DIR = os.path.join(TEST_DATA_DIR, 'GROWTH')
+os.makedirs(GROWTH_DIR, exist_ok=True)
+
 # Valore del riferimento bianco simulato su ogni banda: i getter del sensore
 # finto restituiscono riflettanza * WHITE_REF, cosi' la riflettanza calcolata
 # dal modulo e' esattamente quella voluta.
@@ -59,6 +63,10 @@ class _SimState:
     temp = 24.0      # C
     humidity = 60.0  # %
     distance = 15.0  # cm (distanza sensore-acqua)
+
+    # Distanza sensore-pianta [cm]: parte vicino al riferimento (70cm, pianta
+    # appena piantata) e cala man mano che la pianta cresce.
+    growth_distance = 64.0
 
     # Riflettanza delle tre bande MCARI2. Con green=0.15, red=0.05, nir=0.60
     # l'indice vale ~0.87 ("coltura sana"); facendo camminare il NIR
@@ -207,7 +215,26 @@ def _seed_spectro_data():
                     f"{r_green:.4f}\t{r_red:.4f}\t{r_nir:.4f}\t{index:.4f}\n")
 
 
+def _seed_growth_data():
+    """
+    Semina uno storico di crescita in GROWTH_DIR, cosi' la tab Crescita mostra
+    subito grafico e tabella popolati (altrimenti servirebbero giorni di misure).
+    """
+    csv_path = os.path.join(GROWTH_DIR, 'GROWTH.csv')
+    if os.path.exists(csv_path):
+        return  # gia' seminato in un avvio precedente
+
+    # Curva di crescita plausibile: da 0cm a ~6cm in 10 giorni
+    with open(csv_path, 'w') as f:
+        f.write("datetime,h_plant_cm\n")
+        for days_ago in range(10, 0, -1):
+            day = datetime.now() - timedelta(days=days_ago)
+            h_plant = round(max(0.0, (10 - days_ago) * 0.7 + random.uniform(-0.2, 0.2)), 1)
+            f.write(f"{day.strftime('%Y/%m/%d %H:%M:%S')},{h_plant}\n")
+
+
 _seed_spectro_data()
+_seed_growth_data()
 
 
 def _patched_load_config(self, file_name):
@@ -220,12 +247,14 @@ def _patched_load_config(self, file_name):
     cfg.setdefault('dht22', {})['saving_dir'] = TEST_DATA_DIR + sep
     cfg.setdefault('tank', {})['saving_dir'] = TEST_DATA_DIR + sep
     cfg.setdefault('spectro', {})['saving_dir'] = SPECTRO_DIR
+    cfg.setdefault('plant_growth', {})['saving_dir'] = GROWTH_DIR
 
     # Intervalli brevi per vedere subito gli aggiornamenti durante l'ispezione
     cfg['dht22']['read_interval'] = 3
     cfg['tank']['read_interval'] = 3
     cfg['tank']['n_samples'] = 1
     cfg['spectro']['read_interval'] = 3
+    cfg['plant_growth']['n_samples'] = 1
     return cfg
 
 
@@ -250,6 +279,15 @@ def _sim_measure_distance_avg(trig_pin, echo_pin, n_samples=5, delay=0.065):
 
 
 TM.measure_distance_avg = _sim_measure_distance_avg
+
+
+# Misura crescita simulata: la distanza cala lentamente (la pianta cresce)
+def _sim_measure_distance_mean(trig_pin, echo_pin, n_samples=3, delay=0.065):
+    _SimState.growth_distance = _walk(_SimState.growth_distance, 55.0, 70.0, 0.5)
+    return _SimState.growth_distance
+
+
+TM.measure_distance_mean = _sim_measure_distance_mean
 
 
 # ---------------------------------------------------------------------------
