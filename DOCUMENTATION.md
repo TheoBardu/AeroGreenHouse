@@ -7,8 +7,9 @@ implementate.
 
 Il sistema gira su **Raspberry Pi** e gestisce una serra aeroponica/idroponica:
 comanda le pompe via GPIO, legge temperatura/umidità, controlla il condizionatore via
-infrarossi, monitora il livello del serbatoio con un sensore a ultrasuoni, misura
-l'indice di vegetazione MCARI2 con uno spettrometro e pubblica i dati online.
+infrarossi, monitora il livello del serbatoio e l'altezza delle piante con due sensori a
+ultrasuoni, misura l'indice di vegetazione MCARI2 con uno spettrometro e pubblica i dati
+online.
 
 ---
 
@@ -22,14 +23,15 @@ l'indice di vegetazione MCARI2 con uno spettrometro e pubblica i dati online.
 6. [AmbientManager — DHT22 e VPD](#6-ambientmanager--dht22-e-vpd)
 7. [ClimateManager e IRController — condizionatore](#7-climatemanager-e-ircontroller--condizionatore)
 8. [TankManager — livello serbatoio (HC-SR04)](#8-tankmanager--livello-serbatoio-hc-sr04)
-9. [Spettrometro AS7265x — indice MCARI2](#9-spettrometro-as7265x--indice-mcari2)
-10. [Camera](#10-camera)
-11. [Persistenza dei dati: formati dei file](#11-persistenza-dei-dati-formati-dei-file)
-12. [Elaborazione giornaliera e upload](#12-elaborazione-giornaliera-e-upload)
-13. [Logging](#13-logging)
-14. [Modello di concorrenza (thread)](#14-modello-di-concorrenza-thread)
-15. [Riepilogo delle formule](#15-riepilogo-delle-formule)
-16. [Anomalie rilevate nel codice](#16-anomalie-rilevate-nel-codice)
+9. [PlantGrowthManager — altezza della pianta (HC-SR04)](#9-plantgrowthmanager--altezza-della-pianta-hc-sr04)
+10. [Spettrometro AS7265x — indice MCARI2](#10-spettrometro-as7265x--indice-mcari2)
+11. [Camera](#11-camera)
+12. [Persistenza dei dati: formati dei file](#12-persistenza-dei-dati-formati-dei-file)
+13. [Elaborazione giornaliera e upload](#13-elaborazione-giornaliera-e-upload)
+14. [Logging](#14-logging)
+15. [Modello di concorrenza (thread)](#15-modello-di-concorrenza-thread)
+16. [Riepilogo delle formule](#16-riepilogo-delle-formule)
+17. [Anomalie rilevate nel codice](#17-anomalie-rilevate-nel-codice)
 
 ---
 
@@ -48,24 +50,24 @@ Il codice è organizzato a strati. Ogni strato conosce solo quello sottostante:
            |
       aeroHelper                    <- Strato 2: coordinatore (config, log, GPIO)
            |
-   +-------+-------+-------+--------+
-   |       |       |       |        |
- Jobs   Ambient Climate  Tank    (spettro)   <- Strato 3: manager di categoria
-Manager Manager Manager Manager
-   |       |       |       |
- GPIO    DHT22  IRController HC-SR04         <- Strato 4: driver / hardware
- pompe          + piir      ultrasonic_measurement
-   |       |       |       |
-   +-------+-------+-------+
+   +-------+-------+-------+--------+---------+------------+
+   |       |       |       |        |         |            |
+ Jobs   Ambient Climate  Tank    Spectro  PlantGrowth      <- Strato 3: manager
+Manager Manager Manager Manager  Manager   Manager            di categoria
+   |       |       |       |        |         |
+ GPIO    DHT22  IRController HC-SR04    AS7265x   HC-SR04  <- Strato 4: driver
+ pompe          + piir    ultrasonic_measurement  (2° sensore)   / hardware
+   |       |       |       |        |         |
+   +-------+-------+-------+--------+---------+
            |
-      file .txt giornalieri
+    file .txt giornalieri  +  GROWTH.csv cumulativo
            |
    daily_th_processor.py -> uploader.py -> GitHub -> sito web
 ```
 
 Il principio guida è la **separazione tra interfaccia e logica**: `gui.py` contiene
 soltanto widget e callback, mentre tutta la logica di processo (thread, scheduling,
-formule, I/O sui file) vive in `helper_aeroGreenHouse.py`. La GUI non sa *come* si
+formule, I/O sui file) vive nei manager sotto `managers_classes/`. La GUI non sa *come* si
 attiva una pompa: chiama `self.ah.jobs.start_aeroponics()` e riceve un booleano.
 
 ### Mappa dei file
@@ -73,8 +75,11 @@ attiva una pompa: chiama `self.ah.jobs.start_aeroponics()` e riceve un booleano.
 | File | Ruolo |
 |---|---|
 | `main.py` | Avvio headless (solo aeroponica + idroponica) |
-| `gui.py` | Pannello di controllo Tkinter (1168 righe, 7 tab) |
-| `helper_aeroGreenHouse.py` | **Cuore del sistema**: `aeroHelper` + i 4 manager |
+| `gui.py` | Pannello di controllo Tkinter (9 tab) |
+| `helper_aeroGreenHouse.py` | **Cuore del sistema**: `aeroHelper`, che istanzia i 6 manager |
+| `managers_classes/` | I manager di categoria, uno per file |
+| `managers_classes/plant_growth.py` | Misura dell'altezza pianta + I/O di `GROWTH.csv` |
+| `managers_classes/data_config.py` | Arrotondamento dei dati di misura (decimali / cifre significative) |
 | `config.yaml` | Unica fonte di verità per pin, tempi e soglie |
 | `ir_controller/ir_controller.py` | Invio comandi IR al condizionatore |
 | `ir_controller/ac_remote.json` | Codifica dei comandi del telecomando (per `piir`) |
@@ -122,16 +127,18 @@ vincolante per questo file.
 ### 2.2 `gui.py` — pannello di controllo
 
 Istanzia `aeroHelper` una volta (`self.ah = aeroHelper()`) e costruisce un `Notebook`
-Tkinter con 7 tab:
+Tkinter con 9 tab:
 
 | Tab | Contenuto |
 |---|---|
-| **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank) |
+| **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank, spectro) |
 | **Processi Attivi** | Spie verde/rosso, aggiornate ogni secondo |
 | **Gestione Job** | Treeview dei job; crea/modifica/elimina/attiva/disattiva |
 | **Ambient** | Letture T/H/VPD, avvio/arresto della lettura periodica |
 | **Climatizzatore** | Avvio/arresto del controllo automatico AC, ultimo comando IR |
 | **Livelli Serbatoio** | Distanza, livello, volume, percentuale di riempimento |
+| **Spettrometro** | Indice MCARI2, spia dello stato della pianta, taratura, storico |
+| **Crescita** | Altezza pianta e data dell'ultima misura, grafico dell'andamento, tabella (§9.7) |
 | **Output/Log** | Console colorata dei log in tempo reale |
 
 La GUI usa tre meccanismi periodici basati su `root.after()` (quindi sul thread Tk, senza
@@ -173,6 +180,8 @@ for job in self.config.get('gpio_pins', []):
 states.append(("Lettura Ambient (T/H)",     self.ah.ambient.is_running()))
 states.append(("Controllo Climatizzatore",  self.ah.climate.is_running()))
 states.append(("Lettura Serbatoio",         self.ah.tank.is_running()))
+states.append(("Lettura Spettrometro",      self.ah.spectro.is_running()))
+states.append(("Misura Crescita",           self.ah.plant_growth.is_running()))
 ```
 
 Le righe vengono **ricostruite solo se l'elenco delle chiavi cambia** (`_rebuild_status_rows`),
@@ -189,13 +198,15 @@ Raspberry Pi Zero.
 2. **Configura il logging** — `logging.basicConfig` con due handler: file
    (`<log.directory>/<log.filename>`) e console.
 3. **Inizializza la GPIO** — `initialize_gpio(configs)`, una sola volta per l'intero processo.
-4. **Istanzia i quattro manager**, passando a ciascuno `configs`, `logger` e (per i job) `gpios`:
+4. **Istanzia i sei manager**, passando a ciascuno `configs`, `logger` e (per i job) `gpios`:
 
 ```python
-self.jobs    = JobsManager(self.configs, self.logger, self.gpios)
-self.ambient = AmbientManager(self.configs, self.logger)
-self.climate = ClimateManager(self.configs, self.logger, self.ambient)
-self.tank    = TankManager(self.configs, self.logger)
+self.jobs         = JobsManager(self.configs, self.logger, self.gpios)
+self.ambient      = AmbientManager(self.configs, self.logger)
+self.climate      = ClimateManager(self.configs, self.logger, self.ambient)
+self.tank         = TankManager(self.configs, self.logger)
+self.spectro      = SpectroManager(self.configs, self.logger)
+self.plant_growth = PlantGrowthManager(self.configs, self.logger)
 ```
 
 `ClimateManager` riceve l'istanza di `AmbientManager`: è così che il controllo del
@@ -257,6 +268,16 @@ gpio_pins:
 - name: MOISTURE
   pin: 26
   what_type: sensor     # -> configurato come INPUT, non è un processo
+plant_growth:
+  trig_pin: 5           # TRIG del 2° HC-SR04 (sopra la camera radicale)
+  echo_pin: 6           # ECHO -> partitore di tensione OBBLIGATORIO
+  read_interval_days: 1 # [giorni] ogni quanto misurare l'altezza
+  n_samples: 3          # misure da mediare
+  reference_height_cm: 70.0  # distanza sensore -> camera radicale a pianta assente
+  decimals: 1           # cifre da tenere dalla misura
+  save: true            # abilita/disabilita il salvataggio su file
+  saving_dir: /home/fishnplants/Desktop/data/GROWTH/
+  history_len: 30       # punti mostrati in grafico e tabella
 ir_control:
   tx_pin: 21
   file_ac_name: .../ac_remote.json
@@ -268,7 +289,9 @@ ir_control:
 
 **Attenzione alle unità di misura**, non uniformi e fonte di confusione:
 `interval` è in **minuti**, `on_time` in **secondi**, `dht22.read_interval` in **secondi**,
-`ir_control.control_time` e `time_max_on` in **minuti**.
+`ir_control.control_time` e `time_max_on` in **minuti**, e
+`plant_growth.read_interval_days` in **giorni** — terza unità di tempo del file. Il nome del
+campo porta con sé l'unità (`_days`) proprio per questo; gli altri no.
 
 Il campo `what_type` discrimina il comportamento: `pump` → pin in uscita e job avviabile;
 `sensor` → pin in ingresso, escluso dall'elenco dei processi.
@@ -397,7 +420,7 @@ Il modificatore vale 0 a `T = Topt` (nessuna correzione), tende a **+0.5** per `
 Il parametro `a = −0.2` regola la pendenza della transizione.
 
 > ⚠️ Nell'implementazione attuale la funzione contiene un errore che ne impedisce
-> l'esecuzione (vedi §16).
+> l'esecuzione (vedi §17).
 
 ---
 
@@ -448,7 +471,7 @@ def VPD(self, T, H):
 - `VPD = es − ea = es·(1 − H/100)` — il deficit, in kPa.
 
 > ⚠️ La costante `273.3` a denominatore diverge dalla formulazione standard di Tetens,
-> che usa `237.3` (vedi §16).
+> che usa `237.3` (vedi §17).
 
 ### 6.3 Il ciclo di lettura: `_read_loop()`
 
@@ -711,7 +734,185 @@ L'inizializzazione GPIO avviene una sola volta (`_ensure_gpio` con il flag `_gpi
 
 ---
 
-## 9. Spettrometro AS7265x — indice MCARI2
+## 9. `PlantGrowthManager` — altezza della pianta (HC-SR04)
+
+Misura di quanto sono cresciute le piante, con un **secondo sensore HC-SR04** montato sopra
+la camera radicale e puntato verso il basso. Come `TankManager` (§8) è un wrapper attorno a
+`ultrasonic_measurement.py`: stessa fisica, stesso modulo, bersaglio diverso.
+
+### 9.1 Principio della misura
+
+Il sensore misura la distanza da sé stesso alla **sommità della pianta**. L'altezza della
+pianta è quindi la differenza rispetto a una **distanza di riferimento**, misurata col metro
+a pianta assente:
+
+```
+   [SENSORE]  ---
+   [        ]    |
+   [   🌱   ]    | distanza_misurata      reference_height_cm
+   [        ]  ---                                |
+   [ camera radicale ] --------------------------  ---
+```
+
+```
+h_plant [cm] = reference_height_cm − distanza_misurata
+```
+
+Con il sensore a 70 cm dalla camera radicale:
+
+| Distanza letta | h_plant | Significato |
+|---|---|---|
+| 70 cm | 0 cm | pianta non ancora cresciuta |
+| 65 cm | 5 cm | la pianta è cresciuta di 5 cm |
+
+```python
+h_plant = max(0.0, p['reference'] - dist)
+```
+
+Il **clipping a 0** ha lo stesso ruolo del clipping del serbatoio (§8.4): protegge da una
+taratura imprecisa di `reference_height_cm`. Senza, un riferimento sottostimato di pochi
+millimetri produrrebbe altezze negative — fisicamente impossibili.
+
+`reference_height_cm` è quindi **il parametro da tarare**: va misurato col metro, dal sensore
+alla camera radicale, prima che le piante crescano.
+
+### 9.2 Parametri con fallback
+
+Stesso idiom di `TankManager._params()` (§8.1): prima `config.yaml`, poi le costanti del
+modulo. I default stanno in `plant_growth.py` e non in `ultrasonic_measurement.py`, perché le
+costanti di quel modulo (`GPIO_TRIG = 23`, `TANK_HEIGHT_CM`…) descrivono il **serbatoio**.
+
+```python
+def _params(self):
+    g = self.configs.get('plant_growth', {})
+    return dict(
+        trig=g.get('trig_pin', GPIO_TRIG),                        # 5
+        echo=g.get('echo_pin', GPIO_ECHO),                        # 6
+        interval_days=g.get('read_interval_days', READ_INTERVAL_DAYS),  # 1 giorno
+        n=g.get('n_samples', N_SAMPLES),                          # 3
+        reference=g.get('reference_height_cm', REFERENCE_HEIGHT_CM),    # 70.0 cm
+        decimals=g.get('decimals', DEFAULT_DECIMALS),             # 1
+        save_enabled=g.get('save', True),
+        save_dir=g.get('saving_dir', SAVE_DIR),
+        history_len=g.get('history_len', HISTORY_LEN),            # 30
+    )
+```
+
+### 9.3 Media o mediana? — `measure_distance_mean()`
+
+Il modulo ultrasonico espone ora **due** filtri affiancati, che differiscono solo per la
+statistica finale:
+
+| Funzione | Statistica | Usata da | Perché |
+|---|---|---|---|
+| `measure_distance_avg()` | **mediana** | `TankManager` | robusta agli outlier: un eco spurio (schiuma, riflesso sulla parete della tanica) sposterebbe la media, non la mediana |
+| `measure_distance_mean()` | **media** | `PlantGrowthManager` | su un bersaglio fermo come una pianta il rumore è simmetrico, e la media usa l'informazione di tutte le letture invece di scartarne N−1 |
+
+```python
+readings = []
+for _ in range(n_samples):
+    d = measure_distance_cm(trig_pin, echo_pin)
+    if d > 0: readings.append(d)      # scarta i timeout
+    time.sleep(delay)                 # delay = 0.065 s, come da datasheet
+return sum(readings) / len(readings)  # MEDIA
+```
+
+Entrambe scartano i timeout (`d > 0`), rispettano il ritardo di 65 ms fra misure (> 60 ms
+raccomandati dal datasheet) e restituiscono `-1.0` se nessuna lettura è valida.
+Con la configurazione attuale la crescita media **3 letture**.
+
+### 9.4 Cifre da tenere: `data_config.py`
+
+Modulo di supporto accanto a `plant_growth.py`, per decidere quante cifre conservare dal
+sensore:
+
+```python
+DEFAULT_DECIMALS = 1
+def round_decimals(value, decimals=None)      # arrotonda a N decimali
+def round_significant(value, sig_digits)      # arrotonda a N cifre significative
+```
+
+Il manager usa `round_decimals` con `decimals` da `config.yaml`. La scelta dei **decimali**
+anziché delle cifre significative è motivata dalla fisica del sensore: la risoluzione
+dell'HC-SR04 è di circa **0.17 cm**, quindi su una misura in cm ciò che conta è quante cifre
+dopo la virgola sono credibili — e con `decimals: 1` l'altezza è espressa al millimetro
+abbondante, già oltre la risoluzione reale. `round_significant()` resta disponibile per chi
+preferisca ragionare a cifre significative.
+
+### 9.5 Validazione, salvataggio e storico
+
+`read_now()` applica gli stessi due controlli del serbatoio (§8.5) — timeout (`dist < 0`) e
+range operativo dell'HC-SR04 (2–400 cm) — e in entrambi i casi restituisce `None` con un
+warning, senza scrivere nulla su file.
+
+**Differenza rispetto a `TankManager`:** qui il salvataggio avviene **dentro `read_now()`**,
+non solo nel ciclo periodico. Con una misura ogni giorno la misura manuale è un caso d'uso
+primario, non un'anteprima: la stessa scelta fatta da `SpectroManager`. È subordinata al
+flag `save` di `config.yaml`:
+
+```python
+if p['save_enabled']:
+    save_growth_data(result, p['save_dir'])
+self.history.append({...})
+self.history = self.history[-p['history_len']:]
+```
+
+Lo **storico** (`self.history`) è ricostruito dal file all'istanziazione con `load_history()`,
+come fa `SpectroManager`: la GUI mostra così grafico e tabella già popolati subito dopo un
+riavvio. È tenuto in ordine **cronologico crescente** — è l'ordine che serve al grafico — e
+la tabella lo inverte al momento di visualizzarlo. Le righe malformate vengono loggate e
+saltate, non fanno fallire la lettura (stessa filosofia di `daily_th_processor.py`, §13.1).
+
+### 9.6 Il ciclo periodico
+
+```python
+p = self._params()
+while not self._stop_event.is_set():
+    result = self.read_now()          # read_now salva gia' su file
+    if result is not None and on_update is not None:
+        on_update(result)
+    self._stop_event.wait(p['interval_days'] * SECONDS_PER_DAY)
+```
+
+La **prima misura parte subito** all'avvio e solo dopo si attende l'intervallo: diversamente,
+con una cadenza giornaliera, l'utente non vedrebbe alcun dato per 24 ore. L'attesa usa
+`threading.Event` (§15), quindi il bottone "Arresta Lettura" interrompe immediatamente anche
+un'attesa di un giorno intero.
+
+Il conteggio **non è persistito**: dopo un riavvio del programma riparte da zero, con una
+misura immediata. Per una cadenza giornaliera è accettabile.
+
+### 9.7 La tab "Crescita" e il grafico
+
+Mostra l'altezza dell'ultima misura, la sua data, un grafico dell'andamento nel tempo e la
+tabella data/altezza. Tutti i valori sono in **cm**.
+
+Il grafico è disegnato con le **primitive native di `tk.Canvas`** (`create_line`,
+`create_oval`), non con matplotlib. La scelta è dettata dall'hardware: su un Raspberry Pi
+Zero W (512 MB di RAM, single core) `matplotlib` costerebbe ~2-4 s di import all'avvio della
+GUI e decine di MB residenti. Il costo *non* sarebbe nel disegno — con una misura ogni giorno
+i punti sono al massimo `history_len` e il ridisegno è rarissimo — ma nella libreria stessa.
+Le primitive Tk sono già in memoria e bastano per una spezzata.
+
+> Nota: `daily_th_processor.py` (§13.1) usa matplotlib, ma in un **processo separato**, con
+> import lazy dentro la funzione e backend `Agg`: non pesa mai sulla GUI.
+
+Il ridisegno è agganciato all'evento `<Configure>` (quindi segue il ridimensionamento della
+finestra) e viene rifatto dopo ogni misura. Con meno di due punti il Canvas mostra un
+placeholder testuale invece di una spezzata degenere.
+
+### 9.8 Nota hardware
+
+Vale quanto detto in §8.2: **ECHO emette 5 V e i GPIO del Pi tollerano 3.3 V**, quindi il
+partitore di tensione (R1 = 1 kΩ, R2 = 2 kΩ) è obbligatorio anche per questo secondo sensore.
+I due HC-SR04 convivono senza conflitti perché usano pin distinti (`23/24` il serbatoio,
+`5/6` la crescita) e `GPIO.setmode(BCM)` è impostato una sola volta per il processo.
+
+> ⚠️ I pin `5` e `6` in `config.yaml` sono valori **provvisori**, da allineare al cablaggio reale.
+
+---
+
+## 10. Spettrometro AS7265x — indice MCARI2
 
 Modulo `sensors/spectrometer/mcari2_as7265x.py`. Misura lo stato di salute della pianta con
 il sensore **SparkFun Triad AS7265x** (18 canali, 410–940 nm, bus I2C).
@@ -811,7 +1012,7 @@ Soglie di `interpreta_mcari2()`:
 
 ---
 
-## 10. Camera
+## 11. Camera
 
 `camera/takePicture.py` è un processo indipendente basato su `picamera2`:
 
@@ -826,10 +1027,10 @@ stesso URL per l'ultima foto.
 
 ---
 
-## 11. Persistenza dei dati: formati dei file
+## 12. Persistenza dei dati: formati dei file
 
-Tutti i moduli scrivono file **tabulari giornalieri**, separati da tabulazioni, in un formato
-coerente tra loro.
+Quasi tutti i moduli scrivono file **tabulari giornalieri**, separati da tabulazioni, in un
+formato coerente tra loro. L'unica eccezione è la crescita, per il motivo spiegato sotto.
 
 ### TH (ambient) — `TH_YYYY_MM_DD.txt`
 
@@ -850,15 +1051,33 @@ datetime			 dist_cm	 lvl_cm	 vol_L	 fill_%
 datetime			 green_raw	 red_raw	 nir_raw	 R_green	 R_red	 R_nir	 MCARI2
 ```
 
-I file TANK e SPECTRO scrivono l'**header solo se il file non esiste**
+### GROWTH — `GROWTH.csv`
+
+```
+datetime,h_plant_cm
+2026/07/10 09:00:00,0.0
+2026/07/11 09:00:00,2.3
+2026/07/12 09:00:00,5.1
+```
+
+Doppia eccezione rispetto a tutti gli altri: è l'unico file **CSV** (separato da virgole,
+non da tabulazioni) ed è l'unico **cumulativo** invece che giornaliero. Il motivo è la
+cadenza: con una misura ogni giorno o più, un file al giorno conterrebbe **una riga sola**, e
+ricostruire lo storico per il grafico significherebbe aprire decine di file per leggere un
+valore ciascuno. Un unico file in append rende `load_growth_data()` una singola lettura.
+
+La **data usa lo stesso formato dei file TH** (`%Y/%m/%d %H:%M:%S`), così i dati di crescita
+restano incrociabili con quelli di temperatura e umidità.
+
+I file TANK, SPECTRO e GROWTH scrivono l'**header solo se il file non esiste**
 (`write_header = not os.path.exists(file_path)`); i file TH non hanno header. L'apertura è
-sempre in modalità append (`'a'`), quindi un riavvio del programma non perde i dati del giorno.
+sempre in modalità append (`'a'`), quindi un riavvio del programma non perde i dati.
 
 ---
 
-## 12. Elaborazione giornaliera e upload
+## 13. Elaborazione giornaliera e upload
 
-### 12.1 `daily_th_processor.py`
+### 13.1 `daily_th_processor.py`
 
 Processo separato, schedulato **ogni giorno alle 00:01**, che elabora il file del giorno
 precedente. La pipeline di `daily_job()`:
@@ -893,7 +1112,7 @@ con tick ogni 2 ore, salvato a 250 dpi come `plot.png`.
 **Upload** — invoca `uploader.py` via `subprocess.run` con `sys.executable` (garantisce lo
 stesso interprete Python, quindi lo stesso ambiente virtuale).
 
-### 12.2 `uploader/uploader.py`
+### 13.2 `uploader/uploader.py`
 
 CLI a sottocomandi che pubblica su GitHub via **API REST**, usata come backend dati del sito.
 
@@ -922,12 +1141,12 @@ Il contenuto è codificato in **base64** (richiesto dall'API), sia il testo che 
 
 **Retry** — il decoratore `@retry_with_exponential_backoff` avvolge tutte le funzioni di
 upload: 3 tentativi, propagando l'eccezione all'ultimo. Serve a assorbire i fallimenti di
-rete transitori tipici di una connessione domestica (vedi §16 per un difetto nel calcolo del
+rete transitori tipici di una connessione domestica (vedi §17 per un difetto nel calcolo del
 delay).
 
 ---
 
-## 13. Logging
+## 14. Logging
 
 Configurazione centralizzata in `aeroHelper.__init__`:
 
@@ -951,11 +1170,12 @@ Il modulo standalone `ultrasonic_measurement.py` ha invece un proprio `setup_log
 è eseguito da solo.
 
 Convenzione dei messaggi: prefisso con la categoria in maiuscolo — `AEROPONICS:`,
-`IDROPONICS:`, `AMBIENT:`, `IR_CONTROLLER:`, `TANK:` — così i log sono filtrabili con `grep`.
+`IDROPONICS:`, `AMBIENT:`, `IR_CONTROLLER:`, `TANK:`, `GROWTH:` — così i log sono filtrabili
+con `grep`.
 
 ---
 
-## 14. Modello di concorrenza (thread)
+## 15. Modello di concorrenza (thread)
 
 Il sistema è **multi-thread ma senza lock**. Il modello:
 
@@ -968,6 +1188,8 @@ Il sistema è **multi-thread ma senza lock**. Il modello:
 | Ambient | `start_reading()` | `while not self._stop_event.is_set()` |
 | Climate | `climate.start()` | `while not self._stop_event.is_set()` |
 | Tank | `tank.start_reading()` | `while not self._stop_event.is_set()` |
+| Spectro | `spectro.start_reading()` | `while not self._stop_event.is_set()` |
+| PlantGrowth | `plant_growth.start_reading()` | `while not self._stop_event.is_set()` |
 | Pulse pompa | `runner()` | one-shot, muore da solo |
 
 Tutti sono `daemon=True`: alla chiusura del programma muoiono senza richiedere join.
@@ -976,9 +1198,10 @@ Tutti sono `daemon=True`: alla chiusura del programma muoiono senza richiedere j
 
 1. **Flag booleano** (`JobsManager`) + `sleep(1)` — l'arresto richiede fino a 1 secondo.
    Accettabile per i job delle pompe, il cui ciclo è di minuti.
-2. **`threading.Event`** (`Ambient`, `Climate`, `Tank`) + `_stop_event.wait(interval)` —
-   arresto **immediato**. Indispensabile qui, dove gli intervalli sono di 5 minuti e la GUI
-   deve rispondere subito al bottone Stop.
+2. **`threading.Event`** (`Ambient`, `Climate`, `Tank`, `Spectro`, `PlantGrowth`) +
+   `_stop_event.wait(interval)` — arresto **immediato**. Indispensabile qui, dove gli
+   intervalli vanno dai 5 minuti a un giorno intero (`PlantGrowth`) e la GUI deve rispondere
+   subito al bottone Stop.
 
 **Assenza di lock.** Le variabili condivise sono `last_T`/`last_H` (scritte da Ambient, lette
 da Climate) e i flag booleani. La correttezza si appoggia sull'atomicità delle assegnazioni
@@ -991,7 +1214,7 @@ widget. I dati passano per callback (`on_update`) e per la `Queue` dei log.
 
 ---
 
-## 15. Riepilogo delle formule
+## 16. Riepilogo delle formule
 
 | Grandezza | Formula | Dove |
 |---|---|---|
@@ -1001,6 +1224,7 @@ widget. I dati passano per callback (`on_update`) e per la `Queue` dei log.
 | Modificatore di irrigazione | `t_mod = 1/(exp(−0.2·(T−Topt)) + 1) − 0.5` | `JobsManager.T_modifier` |
 | Nuova attesa irrigazione | `t_new = t_old − t_old · t_mod` | `JobsManager.T_modifier` |
 | Distanza ultrasonica | `d = (durata_echo · 34300) / 2` [cm] | `measure_distance_cm` |
+| **Altezza pianta** | `h_plant = riferimento − d`, con clipping a 0 [cm] | `PlantGrowthManager.read_now` |
 | Livello acqua | `livello = H_tanica − (d − offset)` [cm] | `distance_to_water_volume` |
 | Volume | `V = livello · area / 1000` [L] | `distance_to_water_volume` |
 | Riempimento | `fill% = livello / H_tanica · 100` | `distance_to_water_volume` |
@@ -1009,12 +1233,12 @@ widget. I dati passano per callback (`on_update`) e per la `Queue` dei log.
 
 ---
 
-## 16. Anomalie rilevate nel codice
+## 17. Anomalie rilevate nel codice
 
 Difetti individuati durante la stesura di questo documento. Sono documentati qui perché
 riguardano le formule e le logiche descritte sopra; **nessuno è stato corretto**.
 
-### 16.1 `T_modifier()` — variabile usata prima di essere definita
+### 17.1 `T_modifier()` — variabile usata prima di essere definita
 
 `helper_aeroGreenHouse.py:288`
 
@@ -1027,7 +1251,7 @@ la funzione solleverebbe `UnboundLocalError` a ogni chiamata. Sembra dover esser
 `t_new = t_old - t_old * t_modifier`. Attualmente la funzione non ha chiamanti, quindi il
 difetto è latente.
 
-### 16.2 `VPD()` — costante della formula di Tetens
+### 17.2 `VPD()` — costante della formula di Tetens
 
 `helper_aeroGreenHouse.py:358`
 
@@ -1041,7 +1265,7 @@ Con `237.3`, a T = 23 °C si ha es ≈ 2.81 kPa; con `273.3` si ottiene ≈ 2.55
 **9% in meno**. L'errore cresce con la temperatura. Il VPD registrato finora risulta quindi
 sottostimato in modo sistematico; da valutare se correggere (e come trattare lo storico).
 
-### 16.3 `_read_loop()` — logger invocato come funzione
+### 17.3 `_read_loop()` — logger invocato come funzione
 
 `helper_aeroGreenHouse.py:459`
 
@@ -1056,7 +1280,7 @@ messaggio diagnostico **non viene mai scritto** — un fallimento di upload appa
 come un generico "Errore lettura AMBIENT: 'Logger' object is not callable", che indica il
 punto sbagliato.
 
-### 16.4 `retry_with_exponential_backoff` — il backoff non è esponenziale
+### 17.4 `retry_with_exponential_backoff` — il backoff non è esponenziale
 
 `uploader/uploader.py:65`
 
@@ -1068,7 +1292,7 @@ delay = BASE_DELAY ** (attempt - 1)   # 1**0=1, 1**1=1, 1**2=1
 Con `BASE_DELAY = 1` la potenza vale sempre 1: i retry avvengono a distanza fissa di 1 s,
 non 1s/2s/4s come dichiara il docstring. La forma corretta sarebbe `BASE_DELAY * (2 ** (attempt - 1))`.
 
-### 16.5 `evaluate_and_send()` — nomi dei comandi disallineati
+### 17.5 `evaluate_and_send()` — nomi dei comandi disallineati
 
 `ir_controller/ir_controller.py:83`
 
@@ -1081,10 +1305,13 @@ o `'Hlow'`. La condizione non è quindi mai vera e il **controllo di `time_max_o
 interviene**: il condizionatore non viene mai spento dal timeout di sicurezza, ma solo dal
 rientro di T o H sotto soglia. La lista sembra dover essere `('T_low_21', 'dry')`.
 
-### 16.6 Note minori
+### 17.6 Note minori
 
 - `measure_distance_avg()` restituisce la mediana ma il nome e il parametro `n_samples`
-  suggeriscono la media — il docstring lo chiarisce, il nome no.
+  suggeriscono la media — il docstring lo chiarisce, il nome no. Da quando esiste anche
+  `measure_distance_mean()`, che la media la calcola davvero (§9.3), l'ambiguità è peggiorata:
+  le due funzioni stanno affiancate nello stesso modulo e i nomi non dicono che differiscono
+  proprio nella statistica. `measure_distance_median()` sarebbe il nome corretto per la prima.
 - `measure_dht22()` e `_read_loop()` contengono due copie della stessa logica di lettura DHT22.
 - `eval(f"adafruit_dht.DHT22(board.D{gpio})")` usa `eval` dove basterebbe
   `getattr(board, f"D{gpio}")`.

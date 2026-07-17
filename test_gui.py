@@ -11,10 +11,11 @@ Cosa fa:
   - Reindirizza le cartelle di log/salvataggio dati in una cartella locale
     (./_gui_test_data) cosi' il logging funziona anche su Mac/Windows.
   - Inietta letture sensori SIMULATE (temperatura, umidita', livello serbatoio,
-    spettro AS7265x) cosi' le tab Ambient, Livelli Serbatoio e Spettrometro
-    mostrano valori realistici.
-  - Semina una taratura e uno storico MCARI2 di esempio, cosi' la tab
-    Spettrometro e' gia' popolata al primo avvio.
+    spettro AS7265x, altezza pianta) cosi' le tab Ambient, Livelli Serbatoio,
+    Spettrometro e Crescita mostrano valori realistici.
+  - Semina una taratura e uno storico MCARI2 di esempio, e uno storico di
+    crescita di 10 giorni, cosi' le tab Spettrometro e Crescita sono gia'
+    popolate al primo avvio.
   - Rende l'invio dei comandi IR e l'upload web delle no-op (nessun effetto reale).
   - Avvia la vera GUI (gui.AeroGreenHouseGUI).
 
@@ -255,6 +256,9 @@ def _patched_load_config(self, file_name):
     cfg['tank']['n_samples'] = 1
     cfg['spectro']['read_interval'] = 3
     cfg['plant_growth']['n_samples'] = 1
+    # 3 secondi espressi in giorni: in produzione la misura e' ogni giorno, ma in
+    # simulazione l'attesa terrebbe la tab Crescita immobile per 24 ore.
+    cfg['plant_growth']['read_interval_days'] = 3 / 86400
     return cfg
 
 
@@ -326,7 +330,9 @@ def main():
     print("GUI avviata in modalita' SIMULAZIONE.")
     print(f"Log e dati simulati in: {TEST_DATA_DIR}")
     print("Suggerimento: usa 'Leggi Adesso' per letture immediate, "
-          "'Attiva Lettura' per gli aggiornamenti periodici.")
+          "'Attiva Lettura' per gli aggiornamenti periodici (~3s).")
+    print("Tab Crescita: grafico e tabella partono gia' popolati con 10 giorni "
+          "di storico; 'Attiva Lettura' aggiunge un punto ogni ~3s.")
     root.mainloop()
 
 
