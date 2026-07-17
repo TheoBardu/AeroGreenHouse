@@ -13,9 +13,9 @@ Cosa fa:
   - Inietta letture sensori SIMULATE (temperatura, umidita', livello serbatoio,
     spettro AS7265x, altezza pianta) cosi' le tab Ambient, Livelli Serbatoio,
     Spettrometro e Crescita mostrano valori realistici.
-  - Semina una taratura e uno storico MCARI2 di esempio, e uno storico di
-    crescita di 10 giorni, cosi' le tab Spettrometro e Crescita sono gia'
-    popolate al primo avvio.
+  - Semina dati di esempio (taratura e storico MCARI2, 10 giorni di crescita,
+    letture TH e livello serbatoio) cosi' le tab Spettrometro, Crescita e
+    soprattutto Riepilogo sono gia' popolate al primo avvio.
   - Rende l'invio dei comandi IR e l'upload web delle no-op (nessun effetto reale).
   - Dirotta la calibrazione del sensore di altezza su una COPIA del config
     (_gui_test_data/config_sim.yaml): premendo 'Calibrazione' il config.yaml
@@ -255,8 +255,54 @@ def _redirect_calibration():
     PG.CONFIG_FILE = SIM_CONFIG
 
 
+def _seed_th_data():
+    """
+    Semina un file TH di oggi, cosi' il blocco Ambiente del Riepilogo mostra
+    T/H/VPD con la data gia' all'avvio (senza, sarebbe vuoto fino alla prima
+    lettura del sensore).
+    """
+    day = datetime.now()
+    path = os.path.join(TEST_DATA_DIR, day.strftime('TH_%Y_%m_%d.txt'))
+    if os.path.exists(path):
+        return  # gia' seminato (o scritto da una lettura simulata)
+
+    # Stesso formato di AmbientManager._read_loop: unita' attaccate ai valori
+    with open(path, 'w') as f:
+        for minuti in (30, 20, 10):
+            t = day - timedelta(minutes=minuti)
+            temp = round(random.uniform(22.0, 25.0), 2)
+            hum = round(random.uniform(55.0, 65.0), 2)
+            vpd = round(0.6108 * 2.718281828 ** (17.27 * temp / (temp + 273.3)) * (1 - hum / 100), 4)
+            f.write("%s\t %5.2fC\t %5.2f%%\t %5.4fkPa \n"
+                    % (t.strftime('%Y/%m/%d %H:%M:%S'), temp, hum, vpd))
+
+
+def _seed_tank_data():
+    """
+    Semina un file TANK di oggi, cosi' il blocco Serbatoio del Riepilogo e'
+    popolato all'avvio: il livello e' l'unico dato che si perderebbe ad ogni
+    riavvio del programma.
+    """
+    day = datetime.now()
+    path = os.path.join(TEST_DATA_DIR, day.strftime('TANK_%Y_%m_%d.txt'))
+    if os.path.exists(path):
+        return
+
+    # Stesso formato di ultrasonic_measurement.save_data (header + righe)
+    with open(path, 'w') as f:
+        f.write("datetime\t\t\t dist_cm\t lvl_cm\t vol_L\t fill_%\n")
+        for minuti in (30, 20, 10):
+            t = day - timedelta(minutes=minuti)
+            dist = round(random.uniform(10.0, 14.0), 1)
+            livello = round(30.0 - (dist - 2.0), 1)
+            f.write(f"{t.strftime('%Y/%m/%d %H:%M:%S')}\t{dist:6.1f}\t{livello:6.1f}\t"
+                    f"{livello * 900.0 / 1000.0:7.2f}\t{livello / 30.0 * 100:5.1f}\n")
+
+
 _seed_spectro_data()
 _seed_growth_data()
+_seed_th_data()
+_seed_tank_data()
 _redirect_calibration()
 
 

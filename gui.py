@@ -57,6 +57,7 @@ class AeroGreenHouseGUI:
         # Avvio dei loop periodici della GUI
         self.process_log_queue()
         self.refresh_status_tab()
+        self.refresh_riepilogo_tab()
         self._update_clock()
 
     # ------------------------------------------------------------------
@@ -187,47 +188,52 @@ class AeroGreenHouseGUI:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Tab 1: Configurazione (generalità)
+        # Tab 1: Riepilogo (sintesi di tutte le altre schede)
+        riepilogo_frame = ttk.Frame(notebook)
+        notebook.add(riepilogo_frame, text="Riepilogo")
+        self.create_riepilogo_tab(riepilogo_frame)
+
+        # Tab 2: Configurazione (generalità)
         config_frame = ttk.Frame(notebook)
         notebook.add(config_frame, text="Configurazione")
         self.create_config_tab(config_frame)
 
-        # Tab 2: Processi Attivi (nuova, subito dopo le generalità)
+        # Tab 3: Processi Attivi
         status_frame = ttk.Frame(notebook)
         notebook.add(status_frame, text="Processi Attivi")
         self.create_status_tab(status_frame)
 
-        # Tab 3: Gestione Job
+        # Tab 4: Gestione Job
         jobs_frame = ttk.Frame(notebook)
         notebook.add(jobs_frame, text="Gestione Job")
         self.create_jobs_tab(jobs_frame)
 
-        # Tab 4: TH and VPD (ambient)
+        # Tab 5: TH and VPD (ambient)
         ambient_frame = ttk.Frame(notebook)
         notebook.add(ambient_frame, text="Ambient")
         self.create_ambient_tab(ambient_frame)
 
-        # Tab 5: IR controller
+        # Tab 6: IR controller
         ir_frame = ttk.Frame(notebook)
         notebook.add(ir_frame, text="Climatizzatore")
         self.create_climatizzatore_tab(ir_frame)
 
-        # Tab 6: Livelli Serbatoio (nuova)
+        # Tab 7: Livelli Serbatoio
         tank_frame = ttk.Frame(notebook)
         notebook.add(tank_frame, text="Livelli Serbatoio")
         self.create_tank_tab(tank_frame)
 
-        # Tab 7: Spettrometro (MCARI2)
+        # Tab 8: Spettrometro (MCARI2)
         spectro_frame = ttk.Frame(notebook)
         notebook.add(spectro_frame, text="Spettrometro")
         self.create_spectro_tab(spectro_frame)
 
-        # Tab 8: Crescita (altezza pianta)
+        # Tab 9: Crescita (altezza pianta)
         growth_frame = ttk.Frame(notebook)
         notebook.add(growth_frame, text="Crescita")
         self.create_growth_tab(growth_frame)
 
-        # Tab 9: Output/Log
+        # Tab 10: Output/Log
         output_frame = ttk.Frame(notebook)
         notebook.add(output_frame, text="Output/Log")
         self.create_output_tab(output_frame)
@@ -497,6 +503,271 @@ class AeroGreenHouseGUI:
 
         # Rotella del mouse: da fare per ultimo, quando i widget esistono tutti
         self._bind_mousewheel(parent, config_canvas)
+
+    # ------------------------------------------------------------------
+    # Tab: Riepilogo (sintesi delle altre schede)
+    # ------------------------------------------------------------------
+    def create_riepilogo_tab(self, parent):
+        """
+        Scheda di sintesi: un blocco per categoria, con l'ultimo valore e la
+        data della misura.
+
+        E' la prima scheda costruita, quindi puo' leggere solo self.ah.* e
+        self.config: i widget delle altre schede non esistono ancora.
+
+        I valori arrivano dai manager, che li rileggono da file all'avvio: la
+        scheda e' utile gia' prima di aver avviato una lettura.
+        """
+        # Cache dei valori disegnati: il refresh ridisegna un arco solo quando
+        # il valore cambia (su un Pi Zero W ridisegnare 5 blocchi al secondo
+        # sarebbe spreco puro).
+        self._riep_cache = {}
+        self._riep_active_keys = None
+
+        grid = ttk.Frame(parent)
+        grid.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        for c in range(3):
+            grid.columnconfigure(c, weight=1, uniform='riep')
+        grid.rowconfigure(0, weight=3)
+        grid.rowconfigure(1, weight=2)
+
+        # --- Riga 0: i tre sensori con un fondo scala naturale ---
+        self.riep_amb_gauge, self.riep_amb_labels, self.riep_amb_date = self._build_riep_card(
+            grid, 0, 0, "Ambiente", ("Temperatura", "VPD"))
+
+        self.riep_tank_gauge, self.riep_tank_labels, self.riep_tank_date = self._build_riep_card(
+            grid, 0, 1, "Serbatoio", ("Volume",))
+
+        self.riep_mcari_gauge, self.riep_mcari_labels, self.riep_mcari_date = self._build_riep_card(
+            grid, 0, 2, "Indice MCARI2", ("Stato",))
+
+        # --- Riga 1: crescita (numero grande) e processi attivi ---
+        growth_card = ttk.LabelFrame(grid, text="Crescita", padding=10)
+        growth_card.grid(row=1, column=0, sticky=tk.NSEW, padx=5, pady=5)
+        inner = ttk.Frame(growth_card)
+        inner.pack(expand=True)
+        ttk.Label(inner, text="Altezza pianta", font=('Arial', 12, 'bold')).pack()
+        self.riep_growth_value = ttk.Label(inner, text="--", font=('Arial', 30, 'bold'),
+                                           foreground=self.COL_PRIMARY)
+        self.riep_growth_value.pack()
+        self.riep_growth_date = ttk.Label(inner, text="Nessuna misura", font=('Arial', 9, 'italic'),
+                                          foreground='gray')
+        self.riep_growth_date.pack(pady=(4, 0))
+
+        proc_card = ttk.LabelFrame(grid, text="Processi Attivi", padding=10)
+        proc_card.grid(row=1, column=1, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
+        self.riep_proc_frame = ttk.Frame(proc_card)
+        self.riep_proc_frame.pack(fill=tk.BOTH, expand=True)
+        # Il ciclo di aggiornamento parte da __init__, con gli altri poller.
+
+    def _build_riep_card(self, grid, row, col, titolo, campi):
+        """
+        Crea un blocco del Riepilogo: arco + valori testuali + data.
+
+        :param campi: etichette dei valori testuali sotto l'arco
+        :return: (canvas dell'arco, dict {campo: label del valore}, label della data)
+        """
+        card = ttk.LabelFrame(grid, text=titolo, padding=10)
+        card.grid(row=row, column=col, sticky=tk.NSEW, padx=5, pady=5)
+
+        canvas = tk.Canvas(card, height=110, highlightthickness=0, bg=self.COL_BG)
+        canvas.pack(fill=tk.X)
+        canvas.bind('<Configure>', lambda e: self.refresh_riepilogo_tab(force=True))
+
+        labels = {}
+        for campo in campi:
+            riga = ttk.Frame(card)
+            riga.pack(fill=tk.X, pady=1)
+            ttk.Label(riga, text=f"{campo}:", font=('Arial', 10)).pack(side=tk.LEFT)
+            valore = ttk.Label(riga, text="--", font=('Arial', 12, 'bold'))
+            valore.pack(side=tk.RIGHT)
+            labels[campo] = valore
+
+        data = ttk.Label(card, text="Nessuna misura", font=('Arial', 9, 'italic'),
+                         foreground='gray')
+        data.pack(pady=(6, 0))
+        return canvas, labels, data
+
+    def _draw_arc_gauge(self, canvas, value, vmin, vmax, color, testo, unita=""):
+        """
+        Disegna un indicatore ad arco semicircolare sul Canvas.
+
+        Come per il grafico della crescita, si usano le primitive native di Tk:
+        su un Pi Zero W matplotlib costerebbe secondi di import e decine di MB
+        di RAM per disegnare mezza ciambella.
+
+        :param value: valore da rappresentare (None -> arco vuoto)
+        :param vmin, vmax: fondo scala
+        :param testo: testo grande al centro
+        """
+        canvas.delete('all')
+        w, h = canvas.winfo_width(), canvas.winfo_height()
+        if w <= 1 or h <= 1:  # Canvas non ancora disegnato
+            return
+
+        spessore = 16
+        margine = 18
+        lato = min(w - 2 * margine, (h - 14) * 2)
+        if lato <= spessore * 2:
+            return
+        x0 = (w - lato) / 2
+        y0 = 8
+        box = (x0 + spessore / 2, y0 + spessore / 2,
+               x0 + lato - spessore / 2, y0 + lato - spessore / 2)
+
+        # Arco di sfondo (scala completa)
+        canvas.create_arc(*box, start=180, extent=-180, style=tk.ARC,
+                          outline='#d0d8d0', width=spessore)
+
+        # Arco del valore
+        if value is not None and vmax > vmin:
+            frazione = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
+            if frazione > 0:
+                canvas.create_arc(*box, start=180, extent=-180 * frazione, style=tk.ARC,
+                                  outline=color, width=spessore)
+
+        # Valore al centro
+        cx = x0 + lato / 2
+        cy = y0 + lato / 2
+        canvas.create_text(cx, cy - 8, text=testo, font=('Arial', 20, 'bold'),
+                           fill=color if value is not None else 'gray')
+        if unita:
+            canvas.create_text(cx, cy + 12, text=unita, font=('Arial', 9), fill='gray')
+
+        # Etichette di fondo scala
+        canvas.create_text(x0 + spessore / 2, cy + 12, text=self._fmt_scala(vmin),
+                           font=('Arial', 8), fill='#666666')
+        canvas.create_text(x0 + lato - spessore / 2, cy + 12, text=self._fmt_scala(vmax),
+                           font=('Arial', 8), fill='#666666')
+
+    def _fmt_scala(self, v):
+        """Formatta un fondo scala senza decimali inutili (100 invece di 100.0)."""
+        return f"{v:g}"
+
+    def _format_acq_date(self, ts):
+        """Formatta la data di acquisizione: '2026/07/17 09:41:03' -> '17/07/2026 09:41'."""
+        try:
+            return datetime.strptime(ts, "%Y/%m/%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
+        except (ValueError, TypeError):
+            return str(ts)
+
+    def refresh_riepilogo_tab(self, force=False):
+        """
+        Aggiorna i blocchi del Riepilogo.
+
+        Costruisce i widget una volta sola e poi tocca solo i valori, come fa
+        refresh_status_tab: gli archi si ridisegnano soltanto quando il valore
+        cambia (o su richiesta esplicita, es. al ridimensionamento).
+
+        :param force: ridisegna gli archi anche se i valori non sono cambiati
+        """
+        self._refresh_riep_ambiente(force)
+        self._refresh_riep_serbatoio(force)
+        self._refresh_riep_mcari2(force)
+        self._refresh_riep_crescita()
+        self._refresh_riep_processi()
+
+        # Il tick periodico parte solo dalla chiamata senza force, cosi' il
+        # ridisegno da <Configure> non moltiplica i timer.
+        if not force:
+            self.root.after(1000, self.refresh_riepilogo_tab)
+
+    def _cambiato(self, chiave, valore, force):
+        """True se il valore da disegnare e' cambiato dall'ultimo ridisegno."""
+        if not force and self._riep_cache.get(chiave, '_mai_') == valore:
+            return False
+        self._riep_cache[chiave] = valore
+        return True
+
+    def _refresh_riep_ambiente(self, force):
+        """Blocco Ambiente: arco sull'umidita', numeri per temperatura e VPD."""
+        r = self.ah.ambient.last_result
+        if not self._cambiato('ambiente', None if r is None else tuple(r.values()), force):
+            return
+
+        if r is None:
+            self._draw_arc_gauge(self.riep_amb_gauge, None, 0, 100, 'gray', "--", "Umidità (%)")
+            return
+
+        self._draw_arc_gauge(self.riep_amb_gauge, r['humidity'], 0, 100,
+                             '#ff7f0e', f"{r['humidity']:.1f}", "Umidità (%)")
+        self.riep_amb_labels['Temperatura'].config(text=f"{r['temperature']:.1f} °C",
+                                                   foreground='#207abb')
+        self.riep_amb_labels['VPD'].config(text=f"{r['vpd']:.4f} kPa", foreground='#2ca02c')
+        self.riep_amb_date.config(text=f"Acquisito: {self._format_acq_date(r['timestamp'])}")
+
+    def _refresh_riep_serbatoio(self, force):
+        """Blocco Serbatoio: arco sul riempimento, numero per il volume."""
+        r = self.ah.tank.last_result
+        if not self._cambiato('serbatoio', None if r is None else tuple(r.values()), force):
+            return
+
+        if r is None:
+            self._draw_arc_gauge(self.riep_tank_gauge, None, 0, 100, 'gray', "--", "Riempimento (%)")
+            return
+
+        # Il colore segue il livello: sotto un quarto la tanica va riempita
+        fill = r['fill_percent']
+        colore = self.COL_BAD if fill < 25 else (self.COL_WARN if fill < 50 else '#207abb')
+        self._draw_arc_gauge(self.riep_tank_gauge, fill, 0, 100, colore,
+                             f"{fill:.1f}", "Riempimento (%)")
+        self.riep_tank_labels['Volume'].config(text=f"{r['volume_L']:.2f} L", foreground=colore)
+        self.riep_tank_date.config(text=f"Misurato: {self._format_acq_date(r['timestamp'])}")
+
+    def _refresh_riep_mcari2(self, force):
+        """Blocco MCARI2: arco 0-1 colorato per fascia di salute della pianta."""
+        storico = self.ah.spectro.history
+        r = storico[0] if storico else None   # lo storico spectro ha il piu' recente in testa
+        if not self._cambiato('mcari2', None if r is None else (r['timestamp'], r['mcari2']), force):
+            return
+
+        if r is None:
+            self._draw_arc_gauge(self.riep_mcari_gauge, None, 0, 1, 'gray', "--", "MCARI2")
+            return
+
+        colore = self.MCARI2_COLORS.get(r['stato'], 'gray')
+        self._draw_arc_gauge(self.riep_mcari_gauge, r['mcari2'], 0, 1, colore,
+                             f"{r['mcari2']:.3f}", "MCARI2")
+        self.riep_mcari_labels['Stato'].config(text=r['stato'], foreground=colore)
+        self.riep_mcari_date.config(text=f"Valutato: {self._format_acq_date(r['timestamp'])}")
+
+    def _refresh_riep_crescita(self):
+        """Blocco Crescita: altezza dell'ultima misura (nessun fondo scala naturale)."""
+        storico = self.ah.plant_growth.history
+        r = storico[-1] if storico else None   # lo storico crescita e' in ordine crescente
+        if not self._cambiato('crescita', None if r is None else tuple(r.values()), False):
+            return
+
+        if r is None:
+            self.riep_growth_value.config(text="--", foreground='gray')
+            self.riep_growth_date.config(text="Nessuna misura")
+            return
+
+        self.riep_growth_value.config(text=f"{r['h_plant_cm']:.1f} cm", foreground=self.COL_PRIMARY)
+        self.riep_growth_date.config(text=f"Misurato: {self._format_acq_date(r['timestamp'])}")
+
+    def _refresh_riep_processi(self):
+        """Blocco Processi Attivi: solo quelli in esecuzione."""
+        attivi = [nome for nome, acceso in self.get_process_states() if acceso]
+        if attivi == self._riep_active_keys:
+            return
+        self._riep_active_keys = attivi
+
+        for child in self.riep_proc_frame.winfo_children():
+            child.destroy()
+
+        if not attivi:
+            ttk.Label(self.riep_proc_frame, text="Nessun processo attivo",
+                      font=('Arial', 11, 'italic'), foreground='gray').pack(anchor=tk.W, pady=4)
+            return
+
+        for nome in attivi:
+            riga = ttk.Frame(self.riep_proc_frame)
+            riga.pack(fill=tk.X, pady=2)
+            spia = tk.Canvas(riga, width=16, height=16, highlightthickness=0, bg=self.COL_BG)
+            spia.pack(side=tk.LEFT, padx=(2, 10))
+            spia.create_oval(3, 3, 13, 13, fill=self.COL_OK, outline="#555555")
+            ttk.Label(riga, text=nome, font=('Arial', 11)).pack(side=tk.LEFT)
 
     # ------------------------------------------------------------------
     # Tab: Processi Attivi

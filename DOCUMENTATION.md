@@ -127,10 +127,11 @@ vincolante per questo file.
 ### 2.2 `gui.py` — pannello di controllo
 
 Istanzia `aeroHelper` una volta (`self.ah = aeroHelper()`) e costruisce un `Notebook`
-Tkinter con 9 tab:
+Tkinter con 10 tab:
 
 | Tab | Contenuto |
 |---|---|
+| **Riepilogo** | Sintesi a blocchi di tutte le altre schede: ultimo valore e data per ogni sensore, elenco dei soli processi attivi (§2.3) |
 | **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank, spectro, plant_growth) |
 | **Processi Attivi** | Spie verde/rosso, aggiornate ogni secondo |
 | **Gestione Job** | Treeview dei job; crea/modifica/elimina/attiva/disattiva |
@@ -187,6 +188,45 @@ states.append(("Misura Crescita",           self.ah.plant_growth.is_running()))
 Le righe vengono **ricostruite solo se l'elenco delle chiavi cambia** (`_rebuild_status_rows`),
 altrimenti si aggiorna soltanto il colore: evita di ridisegnare 6 widget al secondo su un
 Raspberry Pi Zero.
+
+### 2.3 La scheda Riepilogo
+
+È la **prima** scheda: risponde alla domanda "come sta la serra?" senza visitare le altre
+nove. Cinque blocchi in una griglia 3+2:
+
+```
+┌───────────────┬───────────────┬───────────────┐
+│   Ambiente    │   Serbatoio   │    MCARI2     │
+│  arco umidità │ arco riempim. │  arco 0-1     │
+│   T · VPD     │    volume     │    stato      │
+├───────────────┼───────────────┴───────────────┤
+│   Crescita    │      Processi Attivi          │
+│   altezza     │   (solo quelli in esecuzione) │
+└───────────────┴───────────────────────────────┘
+```
+
+Ogni blocco riporta la **data della misura**: un valore senza data non dice se è di un minuto
+o di tre giorni fa, e con cadenze che vanno dai 5 minuti (ambiente) a un giorno (crescita) la
+differenza è sostanziale.
+
+**Da dove arrivano i valori.** Solo dai manager, mai da letture fatte dalla GUI: `last_result`
+per ambiente (§6.4) e serbatoio (§8.6), `history[0]` per lo spettrometro (il più recente è in
+testa) e `history[-1]` per la crescita (ordine cronologico crescente — le due liste hanno
+ordinamenti opposti, attenzione). Poiché tutti e quattro rileggono l'ultimo dato dai file
+all'avvio, **la scheda è popolata già alla prima apertura**, prima ancora di avviare una
+lettura.
+
+**Arco o numero.** L'arco (`create_arc` su `tk.Canvas`, come per il grafico della crescita in
+§9.8: niente matplotlib) si usa solo dove esiste un **fondo scala naturale** — umidità 0-100%,
+riempimento 0-100%, MCARI2 0-1 — perché un arco è una frazione di qualcosa e senza un massimo
+sensato mentirebbe. Temperatura, VPD e altezza della pianta non hanno un fondo scala fisico
+ovvio e restano numeri. Il serbatoio colora l'arco per fascia (rosso sotto il 25%, arancione
+sotto il 50%), l'MCARI2 riusa `MCARI2_COLORS`.
+
+**Costo.** Stessa disciplina di §2.2, e per lo stesso motivo: i widget si costruiscono una
+volta sola, poi il tick da 1 s tocca solo i valori. Gli archi si ridisegnano **soltanto se il
+valore è cambiato** (cache `_riep_cache`) e l'elenco dei processi solo se cambia
+(`_riep_active_keys`), quindi a serra ferma un tick non disegna nulla.
 
 ---
 
@@ -505,6 +545,28 @@ os.system(f'python uploader/uploader.py data -t {T} -hu {H} -vpd {vpd} -ts "{tim
 `read_now()` esegue invece una lettura singola e sincrona (bottone "Leggi ora"), senza
 salvare né caricare.
 
+### 6.4 `last_result` e la rilettura da file — con un vincolo di sicurezza
+
+`last_result` (`{temperature, humidity, vpd, timestamp}`) è l'ultima misura completa, e
+alimenta la scheda Riepilogo (§2.3). Viene popolato da `_read_loop`, da `read_now()` e —
+all'avvio — da `load_last_th()`, che rilegge l'ultima riga del file TH più recente.
+
+`load_last_th()` è di sola libreria standard e sceglie il file con `sorted(glob(...))[-1]`: il
+nome `TH_%Y_%m_%d.txt` ordina cronologicamente anche come stringa, quindi il dato c'è anche se
+il pannello viene aperto a mezzanotte e il file di oggi non esiste ancora. Le unità sono
+attaccate ai valori (`23.40C`), quindi il numero si estrae con la stessa regex di
+`daily_th_processor` (§13.1) — ma **senza importarlo**: quel modulo tira dentro `pandas`
+(secondi di import e decine di MB residenti su un Pi Zero W, per leggere una riga di testo),
+`schedule`, e soprattutto esegue `logging.basicConfig` **a import-time**, riconfigurando il
+logging della GUI.
+
+> ⚠️ **`last_T`/`last_H` non vengono e non devono essere seminati da file.** Significano
+> "letto dal sensore in questa sessione", e `ClimateManager.start()` si rifiuta di partire
+> finché sono `None` (§7.1): è la precondizione che impedisce di comandare il condizionatore
+> senza dati sul clima. Popolarli da file, magari "per simmetria" con `last_result`, farebbe
+> agire l'AC su una temperatura vecchia di ore. `last_result` è solo informativo e può
+> permetterselo; quelli no.
+
 ---
 
 ## 7. `ClimateManager` e `IRController` — condizionatore
@@ -731,6 +793,19 @@ if result['volume_L'] < p['low']:
 ```
 
 L'inizializzazione GPIO avviene una sola volta (`_ensure_gpio` con il flag `_gpio_ready`).
+
+### 8.6 Rilettura dell'ultimo livello
+
+`load_last_tank(save_dir)` rilegge l'ultima riga del file `TANK_*.txt` più recente e popola
+`last_result` in `__init__`, come già fanno spettrometro e crescita con i loro storici. Senza,
+il livello del serbatoio sarebbe l'unico dato **perso ad ogni riavvio** del programma, e la
+scheda Riepilogo (§2.3) mostrerebbe un blocco vuoto fino alla prima lettura.
+
+Il lettore vive in `tank_manager.py` e **non** in `ultrasonic_measurement.py`: quel modulo fa
+`import RPi.GPIO` a livello di modulo, mentre leggere un file di testo non ha alcun bisogno
+della GPIO — e così la funzione resta importabile e testabile anche fuori dal Raspberry.
+Salta l'header (`startswith("datetime")`) e le righe malformate, restituendo `None` se non
+trova nulla di leggibile.
 
 ---
 
@@ -1120,6 +1195,24 @@ restano incrociabili con quelli di temperatura e umidità.
 I file TANK, SPECTRO e GROWTH scrivono l'**header solo se il file non esiste**
 (`write_header = not os.path.exists(file_path)`); i file TH non hanno header. L'apertura è
 sempre in modalità append (`'a'`), quindi un riavvio del programma non perde i dati.
+
+### Questi file vengono anche riletti
+
+Non sono solo un archivio: **tutti e quattro i formati hanno un lettore**, ed è ciò che
+permette alla scheda Riepilogo (§2.3) di mostrare l'ultimo valore noto già all'avvio, prima
+che qualsiasi sensore sia stato interrogato.
+
+| File | Lettore | Cosa restituisce |
+|---|---|---|
+| TH | `load_last_th()` (§6.4) | ultima misura T/H/VPD |
+| TANK | `load_last_tank()` (§8.6) | ultimo livello |
+| SPECTRO | `load_measurements()` → `SpectroManager.load_history()` | ultime N misure MCARI2 |
+| GROWTH | `load_growth_data()` → `PlantGrowthManager.load_history()` | ultime N altezze |
+
+Tutti sono di **sola libreria standard** e tolleranti: header, righe vuote e righe malformate
+vengono saltati, e l'assenza del file non è un errore ma un `None`/lista vuota. È la stessa
+filosofia del parsing giornaliero (§13.1): un dato corrotto da un'interruzione di corrente non
+deve impedire di leggere tutti gli altri.
 
 ---
 

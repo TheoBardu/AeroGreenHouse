@@ -1,4 +1,68 @@
+import glob
+import os
 import threading
+
+
+# Nome dei file giornalieri scritti da ultrasonic_measurement.save_data
+TANK_FILE_GLOB = "TANK_*.txt"
+
+
+# =====================================================================
+# Rilettura dell'ultimo dato salvato
+# =====================================================================
+
+def load_last_tank(save_dir: str) -> dict:
+    '''
+    Rilegge l'ultima misura del serbatoio salvata su file.
+
+    Serve alla scheda Riepilogo: il livello e' l'unico dato che oggi si
+    perderebbe ad ogni riavvio del programma.
+
+    Formato della riga (tab-separated, header solo se il file e' nuovo):
+        datetime\t\t\t dist_cm\t lvl_cm\t vol_L\t fill_%
+        2026/07/17 09:41:03\t  12.4\t  19.6\t  17.64\t 65.3
+
+    Vive qui e non in ultrasonic_measurement.py perche' quel modulo importa
+    RPi.GPIO a livello di modulo, mentre leggere un file di testo non ha alcun
+    bisogno della GPIO.
+
+    Viene scelto il file piu' recente: il nome TANK_%Y_%m_%d.txt ordina
+    cronologicamente anche come stringa.
+
+    :param save_dir: directory dei dati TANK
+    :return: dict con distance_cm, water_level_cm, volume_L, fill_percent,
+             timestamp; oppure None se non c'e' nessuna misura leggibile.
+    '''
+    files = sorted(glob.glob(os.path.join(save_dir, TANK_FILE_GLOB)))
+    if not files:
+        return None
+
+    try:
+        with open(files[-1], "r") as f:
+            righe = f.readlines()
+    except OSError:
+        return None
+
+    for line in reversed(righe):
+        line = line.strip()
+        # Salta righe vuote e header
+        if not line or line.startswith("datetime"):
+            continue
+        campi = line.split("\t")
+        if len(campi) < 5:
+            continue
+        try:
+            return {
+                'timestamp': campi[0].strip(),
+                'distance_cm': float(campi[1]),
+                'water_level_cm': float(campi[2]),
+                'volume_L': float(campi[3]),
+                'fill_percent': float(campi[4]),
+            }
+        except ValueError:
+            continue  # riga malformata
+
+    return None
 
 
 # =====================================================================
@@ -20,7 +84,6 @@ class TankManager():
         self.configs = configs
         self.logger = logger
 
-        self.last_result = None
         self._thread = None
         self._stop_event = threading.Event()
         self._gpio_ready = False
@@ -28,6 +91,10 @@ class TankManager():
         # Riuso del modulo standalone (resta eseguibile da solo)
         from sensors.ultrasonic_sensor import ultrasonic_measurement as tank_mod
         self._tank = tank_mod
+
+        # Ultima misura salvata (serve alla scheda Riepilogo gia' all'avvio).
+        # Va dopo self._tank: _params() usa le costanti del modulo come default.
+        self.last_result = self.load_last_reading()
 
     def _params(self):
         '''Legge i parametri dalla sezione 'tank' di config.yaml con fallback alle costanti del modulo.'''
@@ -43,6 +110,14 @@ class TankManager():
             n=t.get('n_samples', self._tank.N_SAMPLES),
             save=t.get('saving_dir', self._tank.SAVE_DIR),
         )
+
+    def load_last_reading(self):
+        '''Rilegge da file l'ultima misura del serbatoio salvata (None se non c'e').'''
+        try:
+            return load_last_tank(self._params()['save'])
+        except Exception as e:
+            self.logger.error(f"TANK: errore nella rilettura dell'ultimo dato: {e}")
+            return None
 
     def _ensure_gpio(self, trig, echo):
         '''Inizializza i pin del sensore una sola volta.'''

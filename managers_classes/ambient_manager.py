@@ -1,6 +1,66 @@
+import glob
 import os
+import re
 import threading
 from time import sleep
+
+
+# Nome dei file giornalieri scritti da _read_loop
+TH_FILE_GLOB = "TH_*.txt"
+
+
+# =====================================================================
+# Rilettura dell'ultimo dato salvato
+# =====================================================================
+
+def load_last_th(save_dir: str) -> dict:
+    '''
+    Rilegge l'ultima misura ambientale salvata su file.
+
+    Serve alla scheda Riepilogo: senza, all'avvio del pannello temperatura,
+    umidita' e VPD resterebbero vuoti fino alla prima lettura del sensore.
+
+    Formato della riga (unita' attaccate ai valori, nessun header):
+        2026/07/17 09:41:03\t  23.40C\t  61.20%\t 1.0234kPa
+
+    Viene scelto il file piu' recente: il nome TH_%Y_%m_%d.txt ordina
+    cronologicamente anche come stringa, quindi basta l'ultimo in ordine
+    alfabetico. Cosi' il dato c'e' anche se il file di oggi non esiste ancora.
+
+    :param save_dir: directory dei dati TH
+    :return: dict con temperature, humidity, vpd, timestamp
+             oppure None se non c'e' nessuna misura leggibile.
+    '''
+    files = sorted(glob.glob(os.path.join(save_dir, TH_FILE_GLOB)))
+    if not files:
+        return None
+
+    try:
+        with open(files[-1], "r") as f:
+            righe = f.readlines()
+    except OSError:
+        return None
+
+    # Dall'ultima riga a ritroso: la prima interpretabile e' l'ultima misura
+    for line in reversed(righe):
+        campi = line.strip().split("\t")
+        if len(campi) < 4:
+            continue
+        try:
+            valori = [re.search(r'[\d.]+', c).group() for c in campi[1:4]]
+        except AttributeError:
+            continue  # riga senza numeri (malformata)
+        try:
+            return {
+                'timestamp': campi[0].strip(),
+                'temperature': float(valori[0]),
+                'humidity': float(valori[1]),
+                'vpd': float(valori[2]),
+            }
+        except ValueError:
+            continue
+
+    return None
 
 
 # =====================================================================
@@ -20,9 +80,18 @@ class AmbientManager():
         self.configs = configs
         self.logger = logger
 
-        # Last DHT22 reading
+        # Last DHT22 reading.
+        # ATTENZIONE: last_T/last_H significano "letto dal sensore in questa
+        # sessione" e NON vanno mai popolati da file. ClimateManager.start() si
+        # rifiuta di partire finche' sono None: e' cio' che impedisce di
+        # comandare il condizionatore senza dati sul clima. Seminarli da file
+        # farebbe agire l'AC su una temperatura magari vecchia di ore.
         self.last_T = None
         self.last_H = None
+
+        # Ultima misura completa (T, H, VPD, data) per la scheda Riepilogo.
+        # Questa invece si puo' rileggere da file: e' solo informativa.
+        self.last_result = self.load_last_reading()
 
         # TH jobs control
         self.th_job_active = False   # controlla se viene eseguita la lettura dei dati TH
@@ -31,6 +100,16 @@ class AmbientManager():
         # Gestione thread di lettura periodica
         self._thread = None
         self._stop_event = threading.Event()
+
+    def load_last_reading(self):
+        '''Rilegge da file l'ultima misura ambientale salvata (None se non c'e').'''
+        save_dir = self.configs.get('dht22', {}).get('saving_dir',
+                                                     '/home/fishnplants/Desktop/data/TH/')
+        try:
+            return load_last_th(save_dir)
+        except Exception as e:
+            self.logger.error(f"AMBIENT: errore nella rilettura dell'ultimo dato: {e}")
+            return None
 
     ###########################################
     # DHT22 sensor measurements
@@ -154,6 +233,9 @@ class AmbientManager():
                 timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                 file_name = datetime.now().strftime("%Y_%m_%d")
 
+                self.last_result = {'timestamp': timestamp, 'temperature': temp,
+                                    'humidity': humidity, 'vpd': vpd}
+
                 # Aggiorna GUI tramite callback
                 if on_update is not None:
                     on_update(temp, humidity, vpd, timestamp)
@@ -196,7 +278,14 @@ class AmbientManager():
         vpd = self.VPD(temp, humidity)
 
         # Ottieni timestamp
-        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        now = datetime.now()
+        timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
+
+        # last_result usa il formato standard del progetto (%Y/%m/%d), non
+        # quello restituito qui: cosi' la scheda Riepilogo non alterna due
+        # formati di data. La tupla restituita resta invariata.
+        self.last_result = {'timestamp': now.strftime("%Y/%m/%d %H:%M:%S"),
+                            'temperature': temp, 'humidity': humidity, 'vpd': vpd}
 
         self.logger.info(f"AMBIENT (lettura immediata): T={temp:.2f}C, H={humidity:.2f}%, VPD={vpd:.4f}kPa")
         return temp, humidity, vpd, timestamp
