@@ -1,13 +1,13 @@
 #! /usr/bin/python
 #
-# FnP - Acquisizione periodica foto
+# FnP - Anteprima camera dal vivo
 #
-# Wrapper da riga di comando su CameraManager: scatta una foto ogni
-# `camera.separation_hours` ore salvandola in `camera.saving_dir`.
-# Entrambi i valori arrivano da config.yaml (la GUI comanda lo stesso manager).
+# Wrapper da riga di comando su CameraManager: apre la finestra di anteprima
+# (Preview.QTGL) e la tiene aperta fino a Ctrl-C. Non c'e' piu' un timer fisso:
+# dalla GUI la stessa anteprima si apre e si chiude con un pulsante.
 #
 # Uso:
-#     python3 camera/takePicture.py
+#     python3 camera/camera.py
 #
 
 import os
@@ -40,14 +40,12 @@ if __name__ == "__main__":
         configs = yaml.safe_load(f)
 
     camera = CameraManager(configs, logger)
-    print(f'Scatto foto ogni {camera.separation_hours()} ore in {camera.saving_dir()}')
-
-    camera.start_acquisition()
+    camera.start_preview()
+    print("Anteprima attiva. Ctrl-C per chiudere.")
 
     try:
-        # Il loop vive nel thread del manager: qui si aspetta solo il Ctrl-C
-        while camera.is_acquiring():
+        while camera.is_previewing():
             sleep(1)
     except KeyboardInterrupt:
-        camera.stop_acquisition()
-        logger.info("Acquisizione terminata dall'utente.")
+        camera.stop_preview()
+        logger.info("Anteprima chiusa dall'utente.")

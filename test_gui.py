@@ -52,6 +52,13 @@ os.makedirs(SPECTRO_DIR, exist_ok=True)
 GROWTH_DIR = os.path.join(TEST_DATA_DIR, 'GROWTH')
 os.makedirs(GROWTH_DIR, exist_ok=True)
 
+# Foto della camera e plot dell'elaborazione giornaliera
+IMG_DIR = os.path.join(TEST_DATA_DIR, 'IMG')
+os.makedirs(IMG_DIR, exist_ok=True)
+
+PLOT_DIR = os.path.join(TEST_DATA_DIR, 'PLOT')
+os.makedirs(PLOT_DIR, exist_ok=True)
+
 # Copia del config su cui scrive la calibrazione (mai il config.yaml reale)
 SIM_CONFIG = os.path.join(TEST_DATA_DIR, 'config_sim.yaml')
 
@@ -170,6 +177,51 @@ def _install_hardware_stubs():
     qwiic.kLedWhite = 0
     sys.modules['qwiic_as7265x'] = qwiic
 
+    # ---- picamera2 (camera del Raspberry Pi) ----
+    # capture_file scrive un JPG generato al volo: cosi' la tab Camera mostra
+    # davvero un'immagine invece del riquadro "nessuna foto".
+    class _Picamera2:
+        sensor_resolution = (640, 480)
+
+        def create_still_configuration(self, **k): return dict(k)
+        def configure(self, *a, **k): pass
+        def start(self, *a, **k): pass
+        def stop(self, *a, **k): pass
+        def start_preview(self, *a, **k):
+            print("[SIM] Anteprima camera aperta (nessuna finestra reale)")
+        def stop_preview(self, *a, **k):
+            print("[SIM] Anteprima camera chiusa")
+        def close(self, *a, **k): pass
+
+        def capture_file(self, path):
+            _write_sim_photo(path)
+
+    picamera2 = types.ModuleType('picamera2')
+    picamera2.Picamera2 = _Picamera2
+    picamera2.Preview = types.SimpleNamespace(QTGL='QTGL', QT='QT', NULL='NULL')
+    sys.modules['picamera2'] = picamera2
+
+
+def _write_sim_photo(path):
+    """
+    Scrive un JPG finto (fondo verde con la data) al posto dello scatto reale.
+
+    Serve solo alla simulazione: senza un file vero la tab Camera non avrebbe
+    nulla da mostrare. Se Pillow manca, non scrive nulla e la tab mostrera' il
+    suo messaggio di fallback.
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    img = Image.new('RGB', (640, 480), (46, 125, 50))
+    draw = ImageDraw.Draw(img)
+    draw.text((20, 20), "FnP AeroGreenHouse - foto simulata", fill=(255, 255, 255))
+    draw.text((20, 40), datetime.now().strftime("%d/%m/%Y %H:%M:%S"), fill=(200, 230, 201))
+    img.save(path)
+
 
 _install_hardware_stubs()
 
@@ -261,20 +313,30 @@ def _seed_th_data():
     T/H/VPD con la data gia' all'avvio (senza, sarebbe vuoto fino alla prima
     lettura del sensore).
     """
+    def riga(f, t):
+        # Stesso formato di AmbientManager._read_loop: unita' attaccate ai valori
+        temp = round(random.uniform(22.0, 25.0), 2)
+        hum = round(random.uniform(55.0, 65.0), 2)
+        vpd = round(0.6108 * 2.718281828 ** (17.27 * temp / (temp + 273.3)) * (1 - hum / 100), 4)
+        f.write("%s\t %5.2fC\t %5.2f%%\t %5.4fkPa \n"
+                % (t.strftime('%Y/%m/%d %H:%M:%S'), temp, hum, vpd))
+
     day = datetime.now()
     path = os.path.join(TEST_DATA_DIR, day.strftime('TH_%Y_%m_%d.txt'))
-    if os.path.exists(path):
-        return  # gia' seminato (o scritto da una lettura simulata)
+    if not os.path.exists(path):   # gia' seminato (o scritto da una lettura simulata)
+        with open(path, 'w') as f:
+            for minuti in (30, 20, 10):
+                riga(f, day - timedelta(minutes=minuti))
 
-    # Stesso formato di AmbientManager._read_loop: unita' attaccate ai valori
-    with open(path, 'w') as f:
-        for minuti in (30, 20, 10):
-            t = day - timedelta(minutes=minuti)
-            temp = round(random.uniform(22.0, 25.0), 2)
-            hum = round(random.uniform(55.0, 65.0), 2)
-            vpd = round(0.6108 * 2.718281828 ** (17.27 * temp / (temp + 273.3)) * (1 - hum / 100), 4)
-            f.write("%s\t %5.2fC\t %5.2f%%\t %5.4fkPa \n"
-                    % (t.strftime('%Y/%m/%d %H:%M:%S'), temp, hum, vpd))
+    # Giornata completa di ieri: e' il file che elabora DailyTHManager, senza il
+    # quale i bottoni "Attiva Daily" della tab Ambiente non avrebbero nulla da
+    # mostrare (statistiche e plot resterebbero vuoti).
+    ieri = day - timedelta(days=1)
+    path_ieri = os.path.join(TEST_DATA_DIR, ieri.strftime('TH_%Y_%m_%d.txt'))
+    if not os.path.exists(path_ieri):
+        with open(path_ieri, 'w') as f:
+            for minuti in range(0, 24 * 60, 10):
+                riga(f, ieri.replace(hour=0, minute=0, second=0) + timedelta(minutes=minuti))
 
 
 def _seed_tank_data():
@@ -317,6 +379,9 @@ def _patched_load_config(self, file_name):
     cfg.setdefault('tank', {})['saving_dir'] = TEST_DATA_DIR + sep
     cfg.setdefault('spectro', {})['saving_dir'] = SPECTRO_DIR
     cfg.setdefault('plant_growth', {})['saving_dir'] = GROWTH_DIR
+    cfg.setdefault('camera', {})['saving_dir'] = IMG_DIR
+    cfg.setdefault('Daily_Data', {})['th_data_dir'] = TEST_DATA_DIR + sep
+    cfg['Daily_Data']['plot_output_dir'] = PLOT_DIR
 
     # Intervalli brevi per vedere subito gli aggiornamenti durante l'ispezione
     cfg['dht22']['read_interval'] = 3
@@ -327,6 +392,9 @@ def _patched_load_config(self, file_name):
     # 3 secondi espressi in giorni: in produzione la misura e' ogni giorno, ma in
     # simulazione l'attesa terrebbe la tab Crescita immobile per 24 ore.
     cfg['plant_growth']['read_interval_days'] = 3 / 86400
+    # 5 secondi espressi in ore: in produzione lo scatto e' ogni 2 ore, ma in
+    # simulazione l'attesa terrebbe la tab Camera immobile.
+    cfg['camera']['separation_hours'] = 5 / 3600
     return cfg
 
 

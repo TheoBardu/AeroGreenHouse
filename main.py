@@ -20,6 +20,12 @@ Comandi (il '-' iniziale e' opzionale: '-job active' == 'job active'):
     -measure th [now|stop]       temperatura, umidita', VPD
     -measure water [now|stop]    livello del serbatoio
 
+    -camera [start|stop|now]     acquisizione periodica delle foto
+    -camera preview [on|off]     anteprima dal vivo (richiede un display)
+
+    -daily [start|stop|now]      elaborazione giornaliera T/H/VPD
+    -daily stats                 statistiche dell'ultima elaborazione
+
     -details                     riepilogo generale (scheda "Riepilogo")
 
     -save list                   dump della configurazione
@@ -84,6 +90,8 @@ class AeroCLI():
             'job': self.cmd_job,
             'measure': self.cmd_measure,
             'mesure': self.cmd_measure,   # alias tollerato
+            'camera': self.cmd_camera,
+            'daily': self.cmd_daily,
             'details': self.cmd_details,
             'save': self.cmd_save,
             'help': self.cmd_help,
@@ -167,6 +175,9 @@ class AeroCLI():
         stati.append(('Lettura Serbatoio', self.ah.tank.is_running()))
         stati.append(('Lettura Spettrometro', self.ah.spectro.is_running()))
         stati.append(('Misura Crescita', self.ah.plant_growth.is_running()))
+        stati.append(('Acquisizione Camera', self.ah.camera.is_acquiring()))
+        stati.append(('Anteprima Camera', self.ah.camera.is_previewing()))
+        stati.append(('Elaborazione Giornaliera', self.ah.daily_th.is_running()))
         return stati
 
     # ------------------------------------------------------------------
@@ -337,6 +348,121 @@ class AeroCLI():
             print(f"Azione sconosciuta: '{azione}'. Usa 'now' o 'stop'.")
 
     # ------------------------------------------------------------------
+    # -camera
+    # ------------------------------------------------------------------
+
+    def cmd_camera(self, args):
+        '''Acquisizione periodica delle foto e anteprima dal vivo.'''
+        azione = args[0].lower() if args else 'start'
+
+        if azione == 'preview':
+            self._camera_preview(args[1].lower() if len(args) > 1 else 'toggle')
+        elif azione == 'now':
+            photo = self.ah.camera.take_picture()
+            print(f"Foto salvata: {photo['path']}")
+        elif azione == 'stop':
+            if self.ah.camera.stop_acquisition():
+                print('Acquisizione foto arrestata.')
+            else:
+                print('Nessuna acquisizione in corso.')
+        elif azione == 'start':
+            if self.ah.camera.start_acquisition(on_capture=self._print_photo):
+                ore = self.ah.camera.separation_hours()
+                print(f"Acquisizione foto avviata: uno scatto ogni {ore} ore "
+                      f"('-camera stop' per fermarla).")
+            elif self.ah.camera.is_previewing():
+                # La camera non e' condivisibile: l'anteprima la tiene occupata.
+                print("Anteprima attiva: usa '-camera preview off' prima di avviare "
+                      "l'acquisizione.")
+            else:
+                print('Acquisizione foto gia\' in corso.')
+        else:
+            print(f"Azione sconosciuta: '{azione}'. Usa 'start', 'stop', 'now' o 'preview'.")
+
+    def _print_photo(self, photo):
+        '''Riga di stampa per ogni scatto dell'acquisizione periodica.'''
+        print(f"[{photo['timestamp']}] foto salvata: {photo['path']}")
+
+    def _camera_preview(self, azione):
+        '''
+        Anteprima dal vivo.
+
+        Richiede un display: via SSH senza X forwarding la finestra QTGL non
+        puo' aprirsi e picamera2 solleva un errore, che il chiamante stampa.
+        '''
+        if azione == 'off':
+            if self.ah.camera.stop_preview():
+                print('Anteprima camera disattivata.')
+            else:
+                print('Anteprima camera non attiva.')
+            return
+
+        if azione not in ('on', 'toggle'):
+            print(f"Azione sconosciuta: '{azione}'. Usa 'on' o 'off'.")
+            return
+
+        if azione == 'toggle' and self.ah.camera.is_previewing():
+            self.ah.camera.stop_preview()
+            print('Anteprima camera disattivata.')
+            return
+
+        if self.ah.camera.start_preview():
+            print("Anteprima camera attivata ('-camera preview off' per chiuderla).")
+        elif self.ah.camera.is_acquiring():
+            print("Acquisizione in corso: la camera e' gia' in uso. "
+                  "Usa '-camera stop' prima di attivare l'anteprima.")
+        else:
+            print('Anteprima camera gia\' attiva.')
+
+    # ------------------------------------------------------------------
+    # -daily
+    # ------------------------------------------------------------------
+
+    def cmd_daily(self, args):
+        '''Elaborazione giornaliera di T/H/VPD (statistiche + plot).'''
+        azione = args[0].lower() if args else 'start'
+
+        if azione == 'stats':
+            self._daily_stats()
+        elif azione == 'now':
+            # upload=True: qui l'elaborazione e' esplicita, non il giro di
+            # riscaldamento che start() fa per popolare le statistiche.
+            if self.ah.daily_th.run_now() is None:
+                print('Nessun dato da elaborare per il giorno precedente.')
+            else:
+                self._daily_stats()
+        elif azione == 'stop':
+            if self.ah.daily_th.stop():
+                print('Elaborazione giornaliera arrestata.')
+            else:
+                print('Nessuna elaborazione giornaliera in corso.')
+        elif azione == 'start':
+            if self.ah.daily_th.start():
+                print("Elaborazione giornaliera avviata: job schedulato alle 00:01 "
+                      "('-daily stop' per fermarla).")
+            else:
+                print('Elaborazione giornaliera gia\' in corso.')
+        else:
+            print(f"Azione sconosciuta: '{azione}'. Usa 'start', 'stop', 'now' o 'stats'.")
+
+    def _daily_stats(self):
+        '''Statistiche dell'ultima elaborazione (max/min/media di T, H e VPD).'''
+        daily = self.ah.daily_th
+        if not daily.last_stats:
+            print(f"Nessuna elaborazione eseguita ({ND})")
+            return
+
+        s = daily.last_stats
+        print(f"Giorno elaborato: {daily.last_date_label}")
+        print(f"{'':<14}{'MAX':>9}{'MIN':>9}{'MEDIA':>9}")
+        for etichetta, k_max, k_min, k_avg in (
+                ('Temperatura', 'max_T', 'min_T', 'avg_temperature'),
+                ("Umidita'", 'max_H', 'min_H', 'avg_humidity'),
+                ('VPD', 'max_VPD', 'min_VPD', 'avg_vpd')):
+            print(f"{etichetta:<14}{s[k_max]:>9g}{s[k_min]:>9g}{s[k_avg]:>9g}")
+        print(f"Plot: {daily.last_plot_path or ND}")
+
+    # ------------------------------------------------------------------
     # -details
     # ------------------------------------------------------------------
 
@@ -349,6 +475,8 @@ class AeroCLI():
         self._details_serbatoio()
         self._details_mcari2()
         self._details_crescita()
+        self._details_camera()
+        self._details_giornaliera()
         self._details_processi()
         print('=' * 52)
 
@@ -397,6 +525,32 @@ class AeroCLI():
         r = history[-1]
         print(f"  Altezza     : {r['h_plant_cm']:.1f} cm")
         print(f"  Misurato    : {format_acq_date(r.get('timestamp'))}")
+
+    def _details_camera(self):
+        '''Ultima foto acquisita (last_photo e' riletto da disco all'avvio).'''
+        print('\n-- Camera --')
+        r = self.ah.camera.last_photo
+        if not r:
+            print(f"  Nessuna foto disponibile ({ND})")
+            return
+        print(f"  File        : {r['path']}")
+        print(f"  Acquisita   : {format_acq_date(r.get('timestamp'))}")
+
+    def _details_giornaliera(self):
+        '''Sintesi dell'ultima elaborazione giornaliera ('-daily stats' per il dettaglio).'''
+        print('\n-- Elaborazione Giornaliera --')
+        daily = self.ah.daily_th
+        if not daily.last_stats:
+            print(f"  Nessun dato disponibile ({ND})")
+            return
+        s = daily.last_stats
+        print(f"  Giorno      : {daily.last_date_label}")
+        print(f"  T media     : {s['avg_temperature']:g} C "
+              f"(max {s['max_T']:g} / min {s['min_T']:g})")
+        print(f"  H media     : {s['avg_humidity']:g} % "
+              f"(max {s['max_H']:g} / min {s['min_H']:g})")
+        print(f"  VPD medio   : {s['avg_vpd']:g} kPa "
+              f"(max {s['max_VPD']:g} / min {s['min_VPD']:g})")
 
     def _details_processi(self):
         '''Elenco dei processi attualmente attivi.'''

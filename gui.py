@@ -151,8 +151,13 @@ class AeroGreenHouseGUI:
         style.configure('TLabelframe', background=self.COL_BG, borderwidth=1, relief='groove')
         style.configure('TLabelframe.Label', background=self.COL_BG,
                         foreground=self.COL_PRIMARY, font=('Arial', 11, 'bold'))
-        style.configure('TNotebook', background=self.COL_BG, borderwidth=0)
-        style.configure('TNotebook.Tab', padding=[14, 7], font=('Arial', 10, 'bold'))
+        # tabposition 'wn': schede impilate a sinistra (w) e allineate in alto
+        # (n). Con dieci schede una fila orizzontale non ci sta piu' in
+        # larghezza; il testo resta orizzontale, cambia solo la disposizione.
+        style.configure('TNotebook', background=self.COL_BG, borderwidth=0,
+                        tabposition='wn')
+        style.configure('TNotebook.Tab', padding=[14, 9], width=18,
+                        anchor=tk.W, font=('Arial', 10, 'bold'))
         style.map('TNotebook.Tab',
                   background=[('selected', self.COL_BG), ('!selected', '#cdd8cd')],
                   foreground=[('selected', self.COL_PRIMARY)])
@@ -233,7 +238,12 @@ class AeroGreenHouseGUI:
         notebook.add(growth_frame, text="Crescita")
         self.create_growth_tab(growth_frame)
 
-        # Tab 10: Output/Log
+        # Tab 10: Camera
+        camera_frame = ttk.Frame(notebook)
+        notebook.add(camera_frame, text="Camera")
+        self.create_camera_tab(camera_frame)
+
+        # Tab 11: Output/Log
         output_frame = ttk.Frame(notebook)
         notebook.add(output_frame, text="Output/Log")
         self.create_output_tab(output_frame)
@@ -304,6 +314,52 @@ class AeroGreenHouseGUI:
 
         _bind(widget)
         _bind(canvas)
+
+    # ------------------------------------------------------------------
+    # Immagini (foto della camera, plot giornaliero)
+    # ------------------------------------------------------------------
+    def _show_image(self, label, path, max_w=760):
+        """
+        Carica `path` dentro `label`, ridimensionandola a `max_w` di larghezza.
+
+        Serve Pillow: tk.PhotoImage legge solo PNG/GIF, mentre le foto della
+        camera sono JPG. Se Pillow manca (o il file non c'e'), la label mostra
+        un messaggio invece di far fallire la scheda.
+
+        Il riferimento all'immagine va tenuto sulla label: Tk non lo conserva e
+        senza di esso il garbage collector la fa sparire appena disegnata.
+
+        :return: True se l'immagine e' stata mostrata
+        """
+        if not path or not os.path.exists(path):
+            label.config(image='', text="Nessuna immagine disponibile", foreground='gray')
+            label.image = None
+            return False
+
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            label.config(image='', foreground='gray',
+                         text="Pillow non installato: impossibile mostrare l'immagine\n"
+                              "(sul Raspberry Pi: sudo apt install python3-pil.imagetk)")
+            label.image = None
+            return False
+
+        try:
+            img = Image.open(path)
+            if img.width > max_w:
+                altezza = round(img.height * max_w / img.width)
+                img = img.resize((max_w, altezza), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+        except Exception as e:
+            label.config(image='', text=f"Errore nel caricamento immagine: {e}",
+                         foreground=self.COL_BAD)
+            label.image = None
+            return False
+
+        label.config(image=photo, text='')
+        label.image = photo   # riferimento anti-GC
+        return True
 
     # ------------------------------------------------------------------
     # Tab: Configurazione
@@ -467,6 +523,42 @@ class AeroGreenHouseGUI:
         ttk.Entry(growth_cfg_frame, textvariable=self.growth_dir_var, width=50).grid(
             row=4, column=1, columnspan=3, sticky=tk.EW)
 
+        # Frame per Camera
+        camera_cfg_frame = ttk.LabelFrame(parent, text="Camera (Picamera2)", padding=10)
+        camera_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        cam = self.config.get('camera', {})
+
+        ttk.Label(camera_cfg_frame, text="Separazione scatti (ore):").grid(row=0, column=0, sticky=tk.W)
+        self.camera_hours_var = tk.StringVar(value=str(cam.get('separation_hours', 2)))
+        ttk.Entry(camera_cfg_frame, textvariable=self.camera_hours_var, width=10).grid(
+            row=0, column=1, sticky=tk.W)
+
+        ttk.Label(camera_cfg_frame, text="Directory foto:").grid(row=1, column=0, sticky=tk.W)
+        self.camera_dir_var = tk.StringVar(
+            value=cam.get('saving_dir', '/home/fishnplants/Desktop/data/IMG/'))
+        ttk.Entry(camera_cfg_frame, textvariable=self.camera_dir_var, width=50).grid(
+            row=1, column=1, columnspan=3, sticky=tk.EW)
+
+        # Frame per Daily Data (elaborazione giornaliera T/H/VPD)
+        daily_cfg_frame = ttk.LabelFrame(
+            parent, text="Daily Data — elaborazione giornaliera T/H/VPD", padding=10)
+        daily_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        dd = self.config.get('Daily_Data', {})
+
+        ttk.Label(daily_cfg_frame, text="Directory dati TH:").grid(row=0, column=0, sticky=tk.W)
+        self.daily_th_dir_var = tk.StringVar(
+            value=dd.get('th_data_dir', '/home/fishnplants/Desktop/data/TH/'))
+        ttk.Entry(daily_cfg_frame, textvariable=self.daily_th_dir_var, width=50).grid(
+            row=0, column=1, sticky=tk.EW)
+
+        ttk.Label(daily_cfg_frame, text="Directory plot:").grid(row=1, column=0, sticky=tk.W)
+        self.daily_plot_dir_var = tk.StringVar(
+            value=dd.get('plot_output_dir', '/home/fishnplants/Desktop/data/PLOT/'))
+        ttk.Entry(daily_cfg_frame, textvariable=self.daily_plot_dir_var, width=50).grid(
+            row=1, column=1, sticky=tk.EW)
+
         # Frame per Log
         log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
         log_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -524,12 +616,16 @@ class AeroGreenHouseGUI:
         self._riep_cache = {}
         self._riep_active_keys = None
 
+        parent, riep_canvas = self._make_scrollable(parent)
+
         grid = ttk.Frame(parent)
         grid.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         for c in range(3):
             grid.columnconfigure(c, weight=1, uniform='riep')
-        grid.rowconfigure(0, weight=3)
-        grid.rowconfigure(1, weight=2)
+        # minsize: dentro l'area scrollabile le righe hanno solo l'altezza che
+        # chiedono, quindi i pesi da soli lascerebbero i blocchi schiacciati.
+        grid.rowconfigure(0, weight=3, minsize=270)
+        grid.rowconfigure(1, weight=2, minsize=190)
 
         # --- Riga 0: i tre sensori con un fondo scala naturale ---
         self.riep_amb_gauge, self.riep_amb_labels, self.riep_amb_date = self._build_riep_card(
@@ -559,6 +655,8 @@ class AeroGreenHouseGUI:
         self.riep_proc_frame = ttk.Frame(proc_card)
         self.riep_proc_frame.pack(fill=tk.BOTH, expand=True)
         # Il ciclo di aggiornamento parte da __init__, con gli altri poller.
+
+        self._bind_mousewheel(parent, riep_canvas)
 
     def _build_riep_card(self, grid, row, col, titolo, campi):
         """
@@ -774,6 +872,8 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_status_tab(self, parent):
         """Tab che mostra lo stato (verde=attivo / rosso=fermo) dei processi."""
+        parent, status_canvas = self._make_scrollable(parent)
+
         container = ttk.LabelFrame(parent, text="Stato dei Processi", padding=15)
         container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
@@ -788,6 +888,11 @@ class AeroGreenHouseGUI:
         # Contenitore delle righe (ricostruito quando cambia l'elenco processi)
         self.status_rows_frame = ttk.Frame(container)
         self.status_rows_frame.pack(fill=tk.BOTH, expand=True)
+
+        self._bind_mousewheel(parent, status_canvas)
+        # Le righe nascono da _rebuild_status_rows, dopo questa bind: la rotella
+        # va riagganciata li'.
+        self._status_canvas = status_canvas
 
     def get_process_states(self):
         """Ritorna la lista ordinata (etichetta, attivo:bool) dei processi monitorati."""
@@ -813,6 +918,9 @@ class AeroGreenHouseGUI:
         states.append(("Lettura Serbatoio", self.ah.tank.is_running()))
         states.append(("Lettura Spettrometro", self.ah.spectro.is_running()))
         states.append(("Misura Crescita", self.ah.plant_growth.is_running()))
+        states.append(("Acquisizione Camera", self.ah.camera.is_acquiring()))
+        states.append(("Anteprima Camera", self.ah.camera.is_previewing()))
+        states.append(("Elaborazione Giornaliera", self.ah.daily_th.is_running()))
         return states
 
     def _rebuild_status_rows(self, keys):
@@ -837,6 +945,8 @@ class AeroGreenHouseGUI:
 
             self.status_indicators[k] = (canvas, oval, state_lbl)
 
+        self._bind_mousewheel(self.status_rows_frame, self._status_canvas)
+
     def refresh_status_tab(self):
         """Aggiorna periodicamente le spie di stato dei processi."""
         states = self.get_process_states()
@@ -859,6 +969,8 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_jobs_tab(self, parent):
         """Tab per gestire i job (GPIO pins)"""
+        parent, jobs_canvas = self._make_scrollable(parent)
+
         # Frame lista job
         list_frame = ttk.LabelFrame(parent, text="Job Attuali", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -904,8 +1016,12 @@ class AeroGreenHouseGUI:
         ttk.Button(toggle_frame, text="❌ Disattiva Job", style='Stop.TButton',
                    command=self.toggle_job_off).pack(side=tk.LEFT, padx=5)
 
+        self._bind_mousewheel(parent, jobs_canvas)
+
     def create_output_tab(self, parent):
         """Tab per visualizzare gli output del terminale e log"""
+        parent, output_canvas = self._make_scrollable(parent)
+
         # Frame superiore con bottoni
         btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -946,6 +1062,11 @@ class AeroGreenHouseGUI:
 
         # Carica il contenuto iniziale
         self.refresh_output()
+
+        # NB: la rotella non viene agganciata al Text dell'output — li' deve
+        # scorrere il log, non la pagina. Il resto della scheda sì.
+        self._bind_mousewheel(btn_frame, output_canvas)
+        self._bind_mousewheel(info_frame, output_canvas)
 
     def refresh_jobs_list(self):
         """Aggiorna la lista dei job nel Treeview"""
@@ -1188,6 +1309,16 @@ class AeroGreenHouseGUI:
             self.config['plant_growth']['history_len'] = int(self.growth_history_var.get())
             self.config['plant_growth']['saving_dir'] = self.growth_dir_var.get()
 
+            # Sezione camera
+            self.config.setdefault('camera', {})
+            self.config['camera']['separation_hours'] = int(self.camera_hours_var.get())
+            self.config['camera']['saving_dir'] = self.camera_dir_var.get()
+
+            # Sezione elaborazione giornaliera (Daily_Data)
+            self.config.setdefault('Daily_Data', {})
+            self.config['Daily_Data']['th_data_dir'] = self.daily_th_dir_var.get()
+            self.config['Daily_Data']['plot_output_dir'] = self.daily_plot_dir_var.get()
+
             self.save_config()
         except ValueError:
             messagebox.showerror("Errore", "Inserire valori validi. Verificare i numeri.")
@@ -1234,6 +1365,14 @@ class AeroGreenHouseGUI:
         self.growth_decimals_var.set(str(g.get('decimals', 1)))
         self.growth_history_var.set(str(g.get('history_len', 30)))
         self.growth_dir_var.set(g.get('saving_dir', '/home/fishnplants/Desktop/data/GROWTH/'))
+
+        cam = self.config.get('camera', {})
+        self.camera_hours_var.set(str(cam.get('separation_hours', 2)))
+        self.camera_dir_var.set(cam.get('saving_dir', '/home/fishnplants/Desktop/data/IMG/'))
+
+        dd = self.config.get('Daily_Data', {})
+        self.daily_th_dir_var.set(dd.get('th_data_dir', '/home/fishnplants/Desktop/data/TH/'))
+        self.daily_plot_dir_var.set(dd.get('plot_output_dir', '/home/fishnplants/Desktop/data/PLOT/'))
 
         messagebox.showinfo("Successo", "Configurazione ricaricata!")
 
@@ -1308,6 +1447,8 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_ambient_tab(self, parent):
         """Tab per monitorare i dati di temperatura, umidità e VPD"""
+        parent, ambient_canvas = self._make_scrollable(parent)
+
         # Frame superiore con bottoni
         btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1351,6 +1492,108 @@ class AeroGreenHouseGUI:
         self.ambient_timestamp_label = ttk.Label(inner_frame, text="Ultimo aggiornamento: --",
                                                  font=('Arial', 12, 'italic'), foreground='gray')
         self.ambient_timestamp_label.pack(pady=20)
+
+        # --- Sezione elaborazione giornaliera (DailyTHManager) ---
+        self._build_daily_section(parent)
+
+        # Rotella del mouse: da fare per ultimo, quando i widget esistono tutti
+        self._bind_mousewheel(parent, ambient_canvas)
+
+    # ------------------------------------------------------------------
+    # Ambiente: sezione elaborazione giornaliera (T/H/VPD del giorno prima)
+    # ------------------------------------------------------------------
+    def _build_daily_section(self, parent):
+        """
+        Blocco statistiche + plot giornaliero, sotto i valori istantanei.
+
+        I valori vengono da DailyTHManager.last_stats, che il manager rilegge
+        elaborando il file del giorno precedente: la sezione e' popolata appena
+        si preme 'Attiva Daily', senza aspettare la mezzanotte.
+        """
+        daily_frame = ttk.LabelFrame(parent, text="Elaborazione giornaliera (T/H/VPD)",
+                                     padding=15)
+        daily_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Controlli
+        btn_frame = ttk.Frame(daily_frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 12))
+        ttk.Button(btn_frame, text="▶️ Attiva Daily", style='Accent.TButton',
+                   command=self.start_daily_processing).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="⏹️ Arresta Daily", style='Stop.TButton',
+                   command=self.stop_daily_processing).pack(side=tk.LEFT, padx=5)
+
+        self.daily_date_label = ttk.Label(daily_frame, text="Nessuna elaborazione eseguita",
+                                          font=('Arial', 11, 'italic'), foreground='gray')
+        self.daily_date_label.pack(anchor=tk.W, pady=(0, 8))
+
+        # Tabella statistiche: righe T/H/VPD, colonne max/min/media
+        stats_frame = ttk.Frame(daily_frame)
+        stats_frame.pack(fill=tk.X, pady=(0, 12))
+        for c in range(4):
+            stats_frame.columnconfigure(c, weight=1, uniform='daily')
+
+        for col, testo in enumerate(("", "Massimo", "Minimo", "Media"), start=0):
+            ttk.Label(stats_frame, text=testo, font=('Arial', 11, 'bold'),
+                      foreground=self.COL_PRIMARY).grid(row=0, column=col, pady=4)
+
+        # Chiavi come le restituisce compute_statistics (daily_th_processor.py)
+        righe = (
+            ("Temperatura (°C)", 'max_T', 'min_T', 'avg_temperature', '#207abb'),
+            ("Umidità (%)", 'max_H', 'min_H', 'avg_humidity', '#ff7f0e'),
+            ("VPD (kPa)", 'max_VPD', 'min_VPD', 'avg_vpd', '#2ca02c'),
+        )
+        self.daily_stat_labels = {}
+        for r, (titolo, k_max, k_min, k_avg, colore) in enumerate(righe, start=1):
+            ttk.Label(stats_frame, text=titolo, font=('Arial', 11, 'bold')).grid(
+                row=r, column=0, sticky=tk.W, pady=4)
+            for col, chiave in enumerate((k_max, k_min, k_avg), start=1):
+                lbl = ttk.Label(stats_frame, text="--", font=('Arial', 14, 'bold'),
+                                foreground=colore)
+                lbl.grid(row=r, column=col, pady=4)
+                self.daily_stat_labels[chiave] = lbl
+
+        # Plot giornaliero
+        ttk.Label(daily_frame, text="Andamento giornaliero",
+                  font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(8, 4))
+        self.daily_plot_label = ttk.Label(daily_frame, text="Nessun plot disponibile",
+                                          foreground='gray')
+        self.daily_plot_label.pack(anchor=tk.W)
+
+        # Cache dell'ultimo giorno disegnato: senza, ricaricheremmo il PNG da
+        # disco ogni secondo (su un Pi Zero W e' spreco puro).
+        self._daily_drawn = None
+        self.refresh_daily_section()
+
+    def refresh_daily_section(self):
+        """Aggiorna statistiche e plot solo quando cambia il giorno elaborato."""
+        daily = self.ah.daily_th
+        if daily.last_stats is not None and daily.last_date_label != self._daily_drawn:
+            self._daily_drawn = daily.last_date_label
+
+            self.daily_date_label.config(
+                text=f"Giorno elaborato: {daily.last_date_label}", foreground=self.COL_TEXT)
+            for chiave, lbl in self.daily_stat_labels.items():
+                lbl.config(text=f"{daily.last_stats[chiave]:g}")
+
+            self._show_image(self.daily_plot_label, daily.last_plot_path)
+
+        self.root.after(2000, self.refresh_daily_section)
+
+    def start_daily_processing(self):
+        """Avvia l'elaborazione giornaliera (DailyTHManager)."""
+        started = self.ah.daily_th.start()
+        if not started:
+            messagebox.showwarning("Avviso", "Elaborazione giornaliera già attiva!")
+            return
+        messagebox.showinfo("Successo", "Elaborazione giornaliera avviata!")
+
+    def stop_daily_processing(self):
+        """Arresta l'elaborazione giornaliera."""
+        stopped = self.ah.daily_th.stop()
+        if not stopped:
+            messagebox.showwarning("Avviso", "Nessuna elaborazione in corso")
+            return
+        messagebox.showinfo("Successo", "Elaborazione giornaliera arrestata!")
 
     def _update_ambient_labels(self, temp, humidity, vpd, timestamp):
         """Aggiorna le label ambient (chiamata via root.after dal thread di lettura)."""
@@ -1420,6 +1663,7 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_climatizzatore_tab(self, parent):
         """Tab per il controllo automatico del condizionatore tramite IR."""
+        parent, ir_canvas = self._make_scrollable(parent)
 
         # Unica sezione: Sistema di Controllo AC
         ac_frame = ttk.LabelFrame(parent, text="Sistema di Controllo AC", padding=20)
@@ -1481,6 +1725,8 @@ class AeroGreenHouseGUI:
             btn_frame, text="⏹️ Disattiva Controllo AC", style='Stop.TButton', command=self.stop_ac_control
         ).pack(side=tk.LEFT, padx=10)
 
+        self._bind_mousewheel(parent, ir_canvas)
+
     def start_ac_control(self):
         """Avvia il controllo automatico del condizionatore (ClimateManager)."""
         def on_command_sent(cmd):
@@ -1518,6 +1764,8 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_tank_tab(self, parent):
         """Tab per monitorare il livello dell'acqua nel serbatoio."""
+        parent, tank_canvas = self._make_scrollable(parent)
+
         # Frame superiore con bottoni
         btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1570,6 +1818,8 @@ class AeroGreenHouseGUI:
         ttk.Label(inner, text="⚠️ Sensore ancora da tarare (parametri nella tab Configurazione)",
                   foreground='#b26a00', font=('Arial', 10, 'italic')).pack()
 
+        self._bind_mousewheel(parent, tank_canvas)
+
     def _update_tank_labels(self, result):
         """Aggiorna le label del serbatoio (chiamata via root.after dal thread di lettura)."""
         self.tank_volume_label.config(text=f"{result['volume_L']:.2f} L")
@@ -1621,6 +1871,8 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_spectro_tab(self, parent):
         """Tab per monitorare l'indice di vegetazione MCARI2 e lo stato della pianta."""
+        parent, spectro_canvas = self._make_scrollable(parent)
+
         # Frame superiore con bottoni
         btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1687,6 +1939,8 @@ class AeroGreenHouseGUI:
 
         # Popola con lo storico gia' letto dai file all'avvio
         self._refresh_spectro_history()
+
+        self._bind_mousewheel(parent, spectro_canvas)
 
     def _refresh_spectro_history(self):
         """Ripopola la tabella dello storico dalle misure del SpectroManager."""
@@ -1785,6 +2039,8 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     def create_growth_tab(self, parent):
         """Tab per monitorare l'altezza della pianta misurata dal sensore ultrasonico."""
+        parent, growth_canvas = self._make_scrollable(parent)
+
         # Frame superiore con bottoni
         btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1845,6 +2101,8 @@ class AeroGreenHouseGUI:
         # Popola con lo storico gia' letto dal file GROWTH.csv all'avvio
         self._refresh_growth_history()
         self._show_last_growth()
+
+        self._bind_mousewheel(parent, growth_canvas)
 
     def _show_last_growth(self):
         """Mostra l'ultima misura disponibile (da file o da lettura) nelle label."""
@@ -2031,6 +2289,118 @@ class AeroGreenHouseGUI:
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nella misura crescita: {str(e)}")
             self.ah.logger.error(f"Errore misura GROWTH: {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Tab: Camera (wrapper sottili → CameraManager)
+    # ------------------------------------------------------------------
+    def create_camera_tab(self, parent):
+        """Tab per l'acquisizione periodica delle foto e l'anteprima dal vivo."""
+        parent, camera_canvas = self._make_scrollable(parent)
+
+        # Controlli
+        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="▶️ Attiva acquisizione", style='Accent.TButton',
+                   command=self.start_camera_acquisition).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="⏹️ Disattiva acquisizione", style='Stop.TButton',
+                   command=self.stop_camera_acquisition).pack(side=tk.LEFT, padx=5)
+        self.camera_preview_btn = ttk.Button(btn_frame, text="📷 Attiva camera",
+                                             command=self.toggle_camera_preview)
+        self.camera_preview_btn.pack(side=tk.LEFT, padx=5)
+
+        # Ultima foto acquisita
+        photo_frame = ttk.LabelFrame(parent, text="Ultima foto acquisita", padding=15)
+        photo_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self.camera_photo_date = ttk.Label(photo_frame, text="Nessuna foto acquisita",
+                                           font=('Arial', 12, 'italic'), foreground='gray')
+        self.camera_photo_date.pack(anchor=tk.W, pady=(0, 8))
+
+        self.camera_photo_label = ttk.Label(photo_frame, text="Nessuna immagine disponibile",
+                                            foreground='gray')
+        self.camera_photo_label.pack(anchor=tk.W)
+
+        # Come per il plot giornaliero: si ricarica il JPG solo quando cambia
+        self._camera_drawn = None
+        self.refresh_camera_tab()
+
+        self._bind_mousewheel(parent, camera_canvas)
+
+    def refresh_camera_tab(self):
+        """Tick periodico della scheda Camera."""
+        self._refresh_camera_view()
+        self.root.after(2000, self.refresh_camera_tab)
+
+    def _refresh_camera_view(self):
+        """
+        Aggiorna anteprima dell'ultima foto e testo del bottone anteprima.
+
+        Separata dal tick perche' il toggle dell'anteprima la richiama subito:
+        se richiamasse refresh_camera_tab moltiplicherebbe i timer.
+        """
+        photo = self.ah.camera.last_photo
+        if photo is not None and photo['path'] != self._camera_drawn:
+            self._camera_drawn = photo['path']
+            self.camera_photo_date.config(
+                text=f"Acquisita: {self._format_acq_date(photo['timestamp'])}",
+                foreground=self.COL_TEXT)
+            self._show_image(self.camera_photo_label, photo['path'])
+
+        self.camera_preview_btn.config(
+            text="📷 Disattiva camera" if self.ah.camera.is_previewing()
+            else "📷 Attiva camera")
+
+    def start_camera_acquisition(self):
+        """Avvia l'acquisizione periodica delle foto (CameraManager)."""
+        def on_capture(photo):
+            # Il thread del manager non puo' toccare Tk: il refresh periodico
+            # se ne accorge da solo, qui basta loggare lo scatto.
+            self.ah.logger.info(f"CAMERA: nuova foto disponibile ({photo['path']})")
+
+        started = self.ah.camera.start_acquisition(on_capture=on_capture)
+        if not started:
+            if self.ah.camera.is_previewing():
+                messagebox.showwarning(
+                    "Avviso",
+                    "L'anteprima della camera è attiva: disattivarla prima di "
+                    "avviare l'acquisizione.")
+            else:
+                messagebox.showwarning("Avviso", "Acquisizione già in corso!")
+            return
+        messagebox.showinfo("Successo", "Acquisizione foto avviata!")
+
+    def stop_camera_acquisition(self):
+        """Arresta l'acquisizione periodica delle foto."""
+        stopped = self.ah.camera.stop_acquisition()
+        if not stopped:
+            messagebox.showwarning("Avviso", "Nessuna acquisizione in corso")
+            return
+        messagebox.showinfo("Successo", "Acquisizione foto arrestata!")
+
+    def toggle_camera_preview(self):
+        """
+        Apre o chiude l'anteprima dal vivo.
+
+        La camera e' una risorsa singola: con l'acquisizione periodica attiva
+        Picamera2 e' (o sara' a breve) gia' istanziata, quindi l'anteprima non
+        puo' partire e l'utente va avvisato.
+        """
+        if not self.ah.camera.is_previewing() and self.ah.camera.is_acquiring():
+            messagebox.showwarning(
+                "Camera occupata",
+                "L'acquisizione delle foto è attiva e la camera è già in uso.\n\n"
+                "Disattivare l'acquisizione prima di attivare la camera.")
+            return
+
+        try:
+            self.ah.camera.toggle_preview()
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nell'anteprima camera: {str(e)}")
+            self.ah.logger.error(f"Errore anteprima CAMERA: {str(e)}")
+            return
+
+        self._refresh_camera_view()
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ import re
 import sys
 import logging
 import schedule
+import threading
 import subprocess
 import pandas as pd
 from time import sleep
@@ -27,14 +28,16 @@ WHEN = "00:01"
 NAME_FORMAT = "TH_%Y_%m_%d.txt"
 
 # ============================================================
-# CONFIGURAZIONE - modifica queste variabili secondo necessità
+# CONFIGURAZIONE
+# Le directory dei dati e del plot arrivano dalla sezione Daily_Data di
+# config.yaml; i valori qui sotto restano solo come default.
 # ============================================================
 
 # Directory dove si trovano i file TH (es. "/home/fishnplants/Desktop/data/TH/")
-TH_DATA_DIR = "/home/fishnplants/Desktop/data/TH/"
+DEFAULT_TH_DATA_DIR = "/home/fishnplants/Desktop/data/TH/"
 
 # Directory dove salvare il plot generato
-PLOT_OUTPUT_DIR = "/home/fishnplants/Desktop/data/PLOT/"
+DEFAULT_PLOT_OUTPUT_DIR = "/home/fishnplants/Desktop/data/PLOT/"
 
 # Path completo dello script uploader.py
 UPLOADER_SCRIPT = "/home/fishnplants/Desktop/codes/python/AeroGreenHouse/uploader/uploader.py"
@@ -228,7 +231,8 @@ def call_uploader(stats: dict, timestamp_str: str):
         logger.error(f"Errore upload plot: {result_plot.stderr.strip()}")
 
 
-def daily_job():
+def daily_job(th_data_dir=DEFAULT_TH_DATA_DIR, plot_output_dir=DEFAULT_PLOT_OUTPUT_DIR,
+              upload=True, log=logger):
     """
     Job principale eseguito alle 00:01 ogni giorno.
     Pipeline:
@@ -237,44 +241,171 @@ def daily_job():
       3. Calcola le statistiche
       4. Genera il plot
       5. Carica medie e plot su GitHub via uploader.py
-    
+
+    :param th_data_dir: directory dei file TH giornalieri
+    :param plot_output_dir: directory in cui salvare il plot
+    :param upload: se False salta l'upload (usato per ripopolare la GUI
+                   all'avvio senza ricaricare su GitHub dati gia' caricati)
+    :param log: logger da usare (quello condiviso quando gira dentro la GUI)
+    :return: dict con stats, plot_path e date_label, oppure None se il file del
+             giorno precedente non esiste o non contiene dati validi.
+
     Reference: schedule pattern - main.py / helper_aeroGreenHouse.py (FnP codebase)
     """
-    logger.info("===== FnP Daily TH Processor - START =====")
+    log.info("===== FnP Daily TH Processor - START =====")
 
     try:
         # 1. Path file giorno precedente
-        filepath, yesterday = get_yesterday_filename(TH_DATA_DIR)
+        filepath, yesterday = get_yesterday_filename(th_data_dir)
         date_label = yesterday.strftime("%Y-%m-%d")
         timestamp_str = yesterday.strftime("%Y-%m-%d")
 
-        logger.info(f"Elaborazione file: {filepath}")
+        log.info(f"Elaborazione file: {filepath}")
 
         if not os.path.exists(filepath):
-            logger.error(f"File non trovato: {filepath}. Job saltato.")
-            return
+            log.error(f"File non trovato: {filepath}. Job saltato.")
+            return None
 
         # 2. Parsing dati
         df = parse_th_file(filepath)
-        logger.info(f"Righe lette: {len(df)}")
+        log.info(f"Righe lette: {len(df)}")
 
         # 3. Calcolo statistiche
         stats = compute_statistics(df)
 
         # 4. Generazione plot
-        generate_plot(df, PLOT_OUTPUT_DIR, date_label)
+        plot_path = generate_plot(df, plot_output_dir, date_label)
 
         # 5. Upload su GitHub
-        call_uploader(stats, timestamp_str)
+        if upload:
+            call_uploader(stats, timestamp_str)
 
-        logger.info("===== FnP Daily TH Processor - DONE =====")
+        log.info("===== FnP Daily TH Processor - DONE =====")
+        return {'stats': stats, 'plot_path': plot_path, 'date_label': date_label}
 
     except FileNotFoundError as e:
-        logger.error(f"File non trovato: {e}")
+        log.error(f"File non trovato: {e}")
     except ValueError as e:
-        logger.error(f"Errore nei dati: {e}")
+        log.error(f"Errore nei dati: {e}")
     except Exception as e:
-        logger.exception(f"Errore inatteso nel job giornaliero: {e}")
+        log.exception(f"Errore inatteso nel job giornaliero: {e}")
+
+    return None
+
+
+# =====================================================================
+# Categoria DAILY (elaborazione giornaliera schedulata)
+# =====================================================================
+class DailyTHManager():
+    '''
+    Manager dell'elaborazione giornaliera T/H/VPD.
+
+    Stessa forma degli altri manager (is_running / start / stop su un thread
+    daemon), cosi' la GUI puo' comandarlo e mostrarne la spia di stato accanto
+    agli altri processi. Conserva l'esito dell'ultimo job (statistiche e path
+    del plot) perche' la scheda Ambiente possa mostrarlo.
+    '''
+
+    def __init__(self, configs, logger_):
+        '''
+        :param configs: dizionario di configurazione (config.yaml)
+        :param logger_: logger condiviso
+        '''
+        self.configs = configs
+        self.logger = logger_
+
+        # Esito dell'ultimo job: popolato da _run_job e ricaricato all'avvio
+        self.last_stats = None
+        self.last_plot_path = None
+        self.last_date_label = None
+
+        self._thread = None
+        self._stop_event = threading.Event()
+
+    ###########################################
+    # Configurazione
+    ###########################################
+    def th_data_dir(self):
+        '''Directory dei file TH giornalieri (sezione Daily_Data del config).'''
+        return self.configs.get('Daily_Data', {}).get('th_data_dir', DEFAULT_TH_DATA_DIR)
+
+    def plot_output_dir(self):
+        '''Directory in cui salvare il plot (sezione Daily_Data del config).'''
+        return self.configs.get('Daily_Data', {}).get('plot_output_dir',
+                                                      DEFAULT_PLOT_OUTPUT_DIR)
+
+    ###########################################
+    # Esecuzione
+    ###########################################
+    def is_running(self):
+        '''True se il thread dello scheduler giornaliero e' attivo.'''
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, on_done=None):
+        '''
+        Avvia lo scheduler giornaliero in un thread.
+
+        Il job viene anche eseguito subito (senza upload) per popolare le
+        statistiche: altrimenti la scheda Ambiente resterebbe vuota fino alla
+        mezzanotte successiva.
+
+        :param on_done: callback opzionale on_done(result) chiamata a fine job
+        :return: False se e' gia' in esecuzione, True altrimenti.
+        '''
+        if self.is_running():
+            return False
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._schedule_loop,
+                                        args=(on_done,), daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self):
+        '''Arresta lo scheduler giornaliero. False se non era in esecuzione.'''
+        if not self.is_running():
+            return False
+        self._stop_event.set()
+        return True
+
+    def run_now(self, upload=True, on_done=None):
+        '''
+        Esegue subito il job sul file del giorno precedente.
+
+        :return: il dict di daily_job (None se non c'era nulla da elaborare)
+        '''
+        result = daily_job(self.th_data_dir(), self.plot_output_dir(),
+                           upload=upload, log=self.logger)
+        if result is not None:
+            self.last_stats = result['stats']
+            self.last_plot_path = result['plot_path']
+            self.last_date_label = result['date_label']
+            if on_done is not None:
+                on_done(result)
+        return result
+
+    def _schedule_loop(self, on_done):
+        '''
+        Loop dello scheduler.
+
+        L'attesa usa _stop_event.wait invece di sleep: "Arresta Daily" deve
+        avere effetto subito, non entro 30 secondi.
+        '''
+        self.logger.info(f"FnP Daily TH Processor avviato - job schedulato alle {WHEN}")
+
+        # Primo giro senza upload: serve solo a popolare la GUI con i dati di ieri
+        self.run_now(upload=False, on_done=on_done)
+
+        job = schedule.every().day.at(WHEN).do(self.run_now, True, on_done)
+        try:
+            while not self._stop_event.is_set():
+                schedule.run_pending()
+                self._stop_event.wait(30)  # polling ogni 30 s per non saturare la CPU
+        finally:
+            # Senza questo, riavviare il processo accumulerebbe job duplicati
+            # nello scheduler globale della libreria schedule.
+            schedule.cancel_job(job)
+
+        self.logger.info("FnP Daily TH Processor interrotto")
 
 
 # ============================================================
@@ -282,18 +413,19 @@ def daily_job():
 # ============================================================
 
 if __name__ == "__main__":
-    logger.info(f"FnP Daily TH Processor avviato - job schedulato alle {WHEN}")
+    import yaml
 
-    # Schedula il job ogni giorno alle 00:01
-    # Reference: schedule library - main.py (FnP AeroGreenHouse repository)
-    schedule.every().day.at(WHEN).do(daily_job)
+    config_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yaml')
+    with open(config_file, "r") as f:
+        configs = yaml.safe_load(f)
 
-    # Opzione: esecuzione immediata per test (decommenta la riga seguente)
-    # daily_job()
+    manager = DailyTHManager(configs, logger)
+    manager.start()
 
     try:
-        while True:
-            schedule.run_pending()
-            sleep(30)  # polling ogni 30 secondi per non saturare la CPU
+        while manager.is_running():
+            sleep(1)
     except KeyboardInterrupt:
+        manager.stop()
         logger.info("FnP Daily TH Processor terminato dall'utente.")

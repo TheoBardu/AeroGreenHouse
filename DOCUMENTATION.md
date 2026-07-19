@@ -75,8 +75,8 @@ attiva una pompa: chiama `self.ah.jobs.start_aeroponics()` e riceve un booleano.
 | File | Ruolo |
 |---|---|
 | `main.py` | Avvio headless (solo aeroponica + idroponica) |
-| `gui.py` | Pannello di controllo Tkinter (9 tab) |
-| `helper_aeroGreenHouse.py` | **Cuore del sistema**: `aeroHelper`, che istanzia i 6 manager |
+| `gui.py` | Pannello di controllo Tkinter (11 tab, impilate a sinistra) |
+| `helper_aeroGreenHouse.py` | **Cuore del sistema**: `aeroHelper`, che istanzia gli 8 manager |
 | `managers_classes/` | I manager di categoria, uno per file |
 | `managers_classes/plant_growth.py` | Misura dell'altezza pianta + I/O di `GROWTH.csv` |
 | `managers_classes/data_config.py` | Arrotondamento dei dati di misura (decimali / cifre significative) |
@@ -85,8 +85,10 @@ attiva una pompa: chiama `self.ah.jobs.start_aeroponics()` e riceve un booleano.
 | `ir_controller/ac_remote.json` | Codifica dei comandi del telecomando (per `piir`) |
 | `sensors/ultrasonic_sensor/ultrasonic_measurement.py` | Fisica della misura HC-SR04 |
 | `sensors/spectrometer/mcari2_as7265x.py` | Acquisizione spettrale e calcolo MCARI2 |
-| `camera/takePicture.py` | Scatto foto periodico |
-| `daily_th_processor.py` | Statistiche e grafico giornalieri |
+| `managers_classes/camera_manager.py` | `CameraManager`: acquisizione periodica e anteprima dal vivo |
+| `camera/takePicture.py` | Wrapper CLI: acquisizione periodica |
+| `camera/camera.py` | Wrapper CLI: anteprima dal vivo |
+| `managers_classes/daily_th_processor.py` | `DailyTHManager`: statistiche e grafico giornalieri |
 | `uploader/uploader.py` | Push di JSON/immagini su GitHub |
 
 ---
@@ -127,20 +129,52 @@ vincolante per questo file.
 ### 2.2 `gui.py` — pannello di controllo
 
 Istanzia `aeroHelper` una volta (`self.ah = aeroHelper()`) e costruisce un `Notebook`
-Tkinter con 10 tab:
+Tkinter con 11 tab:
 
 | Tab | Contenuto |
 |---|---|
 | **Riepilogo** | Sintesi a blocchi di tutte le altre schede: ultimo valore e data per ogni sensore, elenco dei soli processi attivi (§2.3) |
-| **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank, spectro, plant_growth) |
+| **Configurazione** | Editing dei parametri di `config.yaml` (T_var, dht22, log, ir_control, tank, spectro, plant_growth, camera, Daily_Data) |
 | **Processi Attivi** | Spie verde/rosso, aggiornate ogni secondo |
 | **Gestione Job** | Treeview dei job; crea/modifica/elimina/attiva/disattiva |
-| **Ambient** | Letture T/H/VPD, avvio/arresto della lettura periodica |
+| **Ambient** | Letture T/H/VPD, avvio/arresto della lettura periodica; sotto, l'elaborazione giornaliera (§13.1) |
 | **Climatizzatore** | Avvio/arresto del controllo automatico AC, ultimo comando IR |
 | **Livelli Serbatoio** | Distanza, livello, volume, percentuale di riempimento |
 | **Spettrometro** | Indice MCARI2, spia dello stato della pianta, taratura, storico |
 | **Crescita** | Altezza pianta e data dell'ultima misura, grafico dell'andamento, tabella, calibrazione (§9.8) |
+| **Camera** | Acquisizione periodica, anteprima dal vivo, ultima foto con data e ora (§11) |
 | **Output/Log** | Console colorata dei log in tempo reale |
+
+#### Disposizione delle schede e scorrimento
+
+Le schede sono **impilate in colonna a sinistra**, non in fila orizzontale: con undici voci
+i titoli non ci stavano più in larghezza. Basta una riga di stile, perché `ttk.Notebook`
+sa già farlo:
+
+```python
+style.configure('TNotebook', tabposition='wn')   # w = ovest (sinistra), n = allineate in alto
+```
+
+**Tutte** le schede sono scrollabili verticalmente, così aggiungere contenuti in futuro non
+richiede di ripensarne il layout. Tkinter non sa scrollare un `Frame`: serve un `Canvas` che
+lo ospiti in una finestra interna. I due helper che lo fanno sono:
+
+- `_make_scrollable(parent)` — restituisce `(frame in cui costruire, canvas che lo scrolla)`;
+  va chiamato come **prima** riga di ogni `create_*_tab`;
+- `_bind_mousewheel(widget, canvas)` — aggancia la rotella al widget e a tutti i suoi
+  discendenti; va chiamato per **ultimo**, quando i widget esistono tutti (i binding sono
+  per-widget e quelli creati dopo non li erediterebbero).
+
+Due accortezze, entrambe conseguenza del fatto che dentro un canvas un frame ha solo
+l'altezza che *chiede*, non quella della finestra:
+
+- i widget che si espandevano in verticale (Treeview, `Text` dei log) hanno un `height`
+  esplicito, altrimenti `expand=True` non avrebbe nulla da riempire;
+- la griglia del Riepilogo usa `minsize` sulle righe, altrimenti i blocchi risulterebbero
+  schiacciati.
+
+Nella tab Output/Log la rotella è agganciata solo ai frame dei controlli: sopra la console
+deve scorrere il log, non la pagina.
 
 La GUI usa tre meccanismi periodici basati su `root.after()` (quindi sul thread Tk, senza
 bloccare l'interfaccia):
@@ -183,11 +217,14 @@ states.append(("Controllo Climatizzatore",  self.ah.climate.is_running()))
 states.append(("Lettura Serbatoio",         self.ah.tank.is_running()))
 states.append(("Lettura Spettrometro",      self.ah.spectro.is_running()))
 states.append(("Misura Crescita",           self.ah.plant_growth.is_running()))
+states.append(("Acquisizione Camera",       self.ah.camera.is_acquiring()))
+states.append(("Anteprima Camera",          self.ah.camera.is_previewing()))
+states.append(("Elaborazione Giornaliera",  self.ah.daily_th.is_running()))
 ```
 
 Le righe vengono **ricostruite solo se l'elenco delle chiavi cambia** (`_rebuild_status_rows`),
-altrimenti si aggiorna soltanto il colore: evita di ridisegnare 6 widget al secondo su un
-Raspberry Pi Zero.
+altrimenti si aggiorna soltanto il colore: evita di ridisegnare una decina di widget al
+secondo su un Raspberry Pi Zero.
 
 ### 2.3 La scheda Riepilogo
 
@@ -238,7 +275,7 @@ valore è cambiato** (cache `_riep_cache`) e l'elenco dei processi solo se cambi
 2. **Configura il logging** — `logging.basicConfig` con due handler: file
    (`<log.directory>/<log.filename>`) e console.
 3. **Inizializza la GPIO** — `initialize_gpio(configs)`, una sola volta per l'intero processo.
-4. **Istanzia i sei manager**, passando a ciascuno `configs`, `logger` e (per i job) `gpios`:
+4. **Istanzia gli otto manager**, passando a ciascuno `configs`, `logger` e (per i job) `gpios`:
 
 ```python
 self.jobs         = JobsManager(self.configs, self.logger, self.gpios)
@@ -247,6 +284,8 @@ self.climate      = ClimateManager(self.configs, self.logger, self.ambient)
 self.tank         = TankManager(self.configs, self.logger)
 self.spectro      = SpectroManager(self.configs, self.logger)
 self.plant_growth = PlantGrowthManager(self.configs, self.logger)
+self.camera       = CameraManager(self.configs, self.logger)
+self.daily_th     = DailyTHManager(self.configs, self.logger)
 ```
 
 `ClimateManager` riceve l'istanza di `AmbientManager`: è così che il controllo del
@@ -318,6 +357,12 @@ plant_growth:
   save: true            # abilita/disabilita il salvataggio su file
   saving_dir: /home/fishnplants/Desktop/data/GROWTH/
   history_len: 30       # punti mostrati in grafico e tabella
+camera:
+  separation_hours: 2   # [ore] tempo tra uno scatto e il successivo
+  saving_dir: /home/fishnplants/Desktop/data/IMG/
+Daily_Data:
+  th_data_dir: /home/fishnplants/Desktop/data/TH/      # dove leggere i file TH
+  plot_output_dir: /home/fishnplants/Desktop/data/PLOT/ # dove salvare plot.png
 ir_control:
   tx_pin: 21
   file_ac_name: .../ac_remote.json
@@ -329,9 +374,10 @@ ir_control:
 
 **Attenzione alle unità di misura**, non uniformi e fonte di confusione:
 `interval` è in **minuti**, `on_time` in **secondi**, `dht22.read_interval` in **secondi**,
-`ir_control.control_time` e `time_max_on` in **minuti**, e
-`plant_growth.read_interval_days` in **giorni** — terza unità di tempo del file. Il nome del
-campo porta con sé l'unità (`_days`) proprio per questo; gli altri no.
+`ir_control.control_time` e `time_max_on` in **minuti**,
+`plant_growth.read_interval_days` in **giorni** e `camera.separation_hours` in **ore** —
+quattro unità di tempo diverse nello stesso file. I due campi aggiunti più di recente
+portano l'unità nel nome (`_days`, `_hours`) proprio per questo; i più vecchi no.
 
 Il campo `what_type` discrimina il comportamento: `pump` → pin in uscita e job avviabile;
 `sensor` → pin in ingresso, escluso dall'elenco dei processi.
@@ -1137,16 +1183,51 @@ Soglie di `interpreta_mcari2()`:
 
 ## 11. Camera
 
-`camera/takePicture.py` è un processo indipendente basato su `picamera2`:
+La logica vive in `managers_classes/camera_manager.py` (`CameraManager`, stessa forma degli
+altri manager); `camera/takePicture.py` e `camera/camera.py` sono wrapper CLI che leggono
+`config.yaml` e comandano lo stesso manager che comanda la GUI.
 
-```python
-schedule.every(separation_hours).hours.do(take_picture)    # ogni 2 ore
-```
+### 11.1 Acquisizione periodica
+
+`start_acquisition()` / `stop_acquisition()` / `is_acquiring()` — un thread daemon scatta
+ogni `camera.separation_hours` ore in `camera.saving_dir`. L'attesa usa
+`_stop_event.wait(interval)` e non `sleep`: con un intervallo di due ore, un `sleep` avrebbe
+reso "Disattiva acquisizione" senza effetto fino allo scatto successivo.
 
 Ogni scatto produce **due file**: uno storico con timestamp
 (`YYYY-MM-DD_HH-MM-SS.jpg`) e una copia a nome fisso `image.jpg`, che è quella che
 `uploader.py` carica su GitHub — il nome fisso permette al sito di puntare sempre allo
 stesso URL per l'ultima foto.
+
+### 11.2 Anteprima dal vivo
+
+`start_preview()` / `stop_preview()` / `toggle_preview()` / `is_previewing()` — apre la
+finestra `Preview.QTGL` e la tiene aperta finché non viene chiusa. Non c'è più un timer
+fisso: prima `camera.py` mostrava l'anteprima per 60 secondi esatti e poi usciva.
+
+### 11.3 Perché i due usi si escludono a vicenda
+
+La Picamera2 è una **risorsa singola**: istanziarla due volte fa fallire l'anteprima o,
+peggio, lo scatto schedulato. Il manager lo impedisce da entrambi i lati —
+`start_preview()` ritorna `False` se l'acquisizione è attiva, `start_acquisition()` ritorna
+`False` se l'anteprima è aperta — e un `threading.Lock` protegge l'accesso vero e proprio
+all'oggetto. La GUI traduce il `False` in un pop-up che spiega quale processo va fermato
+prima.
+
+### 11.4 La tab Camera
+
+Tre bottoni ("Attiva acquisizione", "Disattiva acquisizione", "Attiva/Disattiva camera",
+quest'ultimo con il testo che segue lo stato) e, in basso, l'**ultima foto acquisita** con
+data e ora. La foto viene riletta da disco all'avvio da `load_last_photo()`, che prende il
+file più recente ignorando `image.jpg` e ricava la data dal **nome** e non dal mtime (che
+una copia del file falserebbe): senza, con `separation_hours: 2` la scheda resterebbe vuota
+per due ore dopo ogni avvio.
+
+Il rendering passa da `_show_image()`, che usa **Pillow**: `tk.PhotoImage` legge solo PNG e
+GIF, mentre le foto sono JPG. Se Pillow manca, la scheda mostra un messaggio invece di
+fallire (`sudo apt install python3-pil.imagetk`). Il riferimento all'immagine va tenuto
+sulla label: Tk non lo conserva e senza di esso il garbage collector la fa sparire appena
+disegnata.
 
 ---
 
@@ -1220,8 +1301,13 @@ deve impedire di leggere tutti gli altri.
 
 ### 13.1 `daily_th_processor.py`
 
-Processo separato, schedulato **ogni giorno alle 00:01**, che elabora il file del giorno
-precedente. La pipeline di `daily_job()`:
+`DailyTHManager` è schedulato **ogni giorno alle 00:01** ed elabora il file del giorno
+precedente. Legge le directory dalla sezione `Daily_Data` di `config.yaml`
+(`th_data_dir`, `plot_output_dir`); le costanti nel modulo restano solo come default.
+Si comanda dalla tab Ambient ("Attiva Daily" / "Arresta Daily") oppure da riga di comando
+(`python3 managers_classes/daily_th_processor.py`).
+
+La pipeline di `daily_job()`:
 
 ```
 1. get_yesterday_filename()  -> path di TH_<ieri>.txt
@@ -1252,6 +1338,23 @@ con tick ogni 2 ore, salvato a 250 dpi come `plot.png`.
 
 **Upload** — invoca `uploader.py` via `subprocess.run` con `sys.executable` (garantisce lo
 stesso interprete Python, quindi lo stesso ambiente virtuale).
+
+**Primo giro senza upload** — `start()` esegue subito il job una volta con `upload=False`,
+poi entra nello scheduler. Serve a popolare la tab Ambient: senza, statistiche e plot
+resterebbero vuoti fino alla mezzanotte successiva. L'upload è saltato perché quei dati sono
+già stati caricati dal giro precedente.
+
+**Cancellazione del job** — all'uscita dal loop si chiama `schedule.cancel_job(job)`:
+`schedule` tiene una coda globale, quindi senza cancellazione ogni riavvio dalla GUI
+accumulerebbe un job duplicato.
+
+### 13.1.1 La sezione "Elaborazione giornaliera" nella tab Ambient
+
+Sotto i valori istantanei di T/H/VPD, la scheda mostra i risultati dell'ultimo job: bottoni
+di avvio/arresto, una tabella **T/H/VPD × max/min/media** (le chiavi sono quelle restituite
+da `compute_statistics`) e il `plot.png` generato. `refresh_daily_section()` gira ogni 2 s
+ma ridisegna solo quando cambia il giorno elaborato: ricaricare il PNG da disco ogni tick
+sarebbe spreco puro su un Pi Zero W — stessa logica di `_cambiato()` nel Riepilogo.
 
 ### 13.2 `uploader/uploader.py`
 
@@ -1331,6 +1434,8 @@ Il sistema è **multi-thread ma senza lock**. Il modello:
 | Tank | `tank.start_reading()` | `while not self._stop_event.is_set()` |
 | Spectro | `spectro.start_reading()` | `while not self._stop_event.is_set()` |
 | PlantGrowth | `plant_growth.start_reading()` | `while not self._stop_event.is_set()` |
+| Camera | `camera.start_acquisition()` | `while not self._stop_event.is_set()` |
+| Daily TH | `daily_th.start()` | `while not self._stop_event.is_set()` |
 | Pulse pompa | `runner()` | one-shot, muore da solo |
 
 Tutti sono `daemon=True`: alla chiusura del programma muoiono senza richiedere join.
@@ -1339,16 +1444,19 @@ Tutti sono `daemon=True`: alla chiusura del programma muoiono senza richiedere j
 
 1. **Flag booleano** (`JobsManager`) + `sleep(1)` — l'arresto richiede fino a 1 secondo.
    Accettabile per i job delle pompe, il cui ciclo è di minuti.
-2. **`threading.Event`** (`Ambient`, `Climate`, `Tank`, `Spectro`, `PlantGrowth`) +
-   `_stop_event.wait(interval)` — arresto **immediato**. Indispensabile qui, dove gli
-   intervalli vanno dai 5 minuti a un giorno intero (`PlantGrowth`) e la GUI deve rispondere
-   subito al bottone Stop.
+2. **`threading.Event`** (`Ambient`, `Climate`, `Tank`, `Spectro`, `PlantGrowth`, `Camera`,
+   `DailyTH`) + `_stop_event.wait(interval)` — arresto **immediato**. Indispensabile qui,
+   dove gli intervalli vanno dai 5 minuti a un giorno intero (`PlantGrowth`, `DailyTH`) e la
+   GUI deve rispondere subito al bottone Stop.
 
-**Assenza di lock.** Le variabili condivise sono `last_T`/`last_H` (scritte da Ambient, lette
-da Climate) e i flag booleani. La correttezza si appoggia sull'atomicità delle assegnazioni
-di riferimenti in CPython (GIL): letture e scritture di un `float` o `bool` singolo non
-possono interlacciarsi. Il codice **non fa mai read-modify-write** su questi valori, che è il
-caso in cui servirebbe un lock.
+**Quasi assenza di lock.** Le variabili condivise sono `last_T`/`last_H` (scritte da Ambient,
+lette da Climate) e i flag booleani. La correttezza si appoggia sull'atomicità delle
+assegnazioni di riferimenti in CPython (GIL): letture e scritture di un `float` o `bool`
+singolo non possono interlacciarsi. Il codice **non fa mai read-modify-write** su questi
+valori, che è il caso in cui servirebbe un lock.
+
+L'unica eccezione è `CameraManager`, che usa un `threading.Lock`: lì la risorsa condivisa non
+è un valore ma l'oggetto `Picamera2`, che non può essere aperto due volte (§11.3).
 
 **Thread-safety della GUI**: Tkinter non è thread-safe; nessun thread di lavoro tocca i
 widget. I dati passano per callback (`on_update`) e per la `Queue` dei log.
@@ -1456,7 +1564,7 @@ self.ah = aeroHelper()             # gui.py:48   -> dentro, dizionario B
 ```
 
 Lo stesso `config.yaml` viene letto **due volte**, in due oggetti separati. `aeroHelper` passa
-il **suo** (B) a tutti i manager per riferimento, quindi i sei manager sono coerenti tra loro;
+il **suo** (B) a tutti i manager per riferimento, quindi tutti i manager sono coerenti tra loro;
 ma la GUI usa A, e i due non comunicano. Conseguenze concrete:
 
 - **Le modifiche salvate dalla tab Configurazione non raggiungono i manager** finché il

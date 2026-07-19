@@ -39,6 +39,12 @@ plant_growth:
   save: true
   saving_dir: /home/fishnplants/Desktop/data/GROWTH/
   history_len: 30
+camera:
+  separation_hours: 2
+  saving_dir: /home/fishnplants/Desktop/data/IMG/
+Daily_Data:
+  th_data_dir: /home/fishnplants/Desktop/data/TH/
+  plot_output_dir: /home/fishnplants/Desktop/data/PLOT/
 ir_control:
   rx_pin: 20
   tx_pin: 21
