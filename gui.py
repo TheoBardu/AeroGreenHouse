@@ -1807,7 +1807,7 @@ class AeroGreenHouseGUI:
         # Altezza dell'ultima misura (valore principale)
         val_frame = ttk.Frame(inner)
         val_frame.pack(pady=5)
-        ttk.Label(val_frame, text="h_plant", font=('Arial', 16, 'bold')).pack()
+        ttk.Label(val_frame, text="Altezza pianta", font=('Arial', 16, 'bold')).pack()
         self.growth_value_label = ttk.Label(val_frame, text="--", font=('Arial', 28, 'bold'),
                                             foreground=self.COL_PRIMARY)
         self.growth_value_label.pack()
