@@ -920,7 +920,7 @@ class AeroGreenHouseGUI:
         states.append(("Misura Crescita", self.ah.plant_growth.is_running()))
         states.append(("Acquisizione Camera", self.ah.camera.is_acquiring()))
         states.append(("Anteprima Camera", self.ah.camera.is_previewing()))
-        states.append(("Elaborazione Giornaliera", self.ah.daily_th.is_running()))
+        states.append(("Daily TH VPD", self.ah.daily_th.is_running()))
         return states
 
     def _rebuild_status_rows(self, keys):
