@@ -1618,6 +1618,7 @@ class AeroGreenHouseGUI:
             messagebox.showwarning("Avviso", "Nessuna lettura in corso")
             return
         messagebox.showinfo("Successo", "Lettura ambient arrestata!")
+        self.refresh_riepilogo_tab(force=True)
 
     def read_ambient_now(self):
         """Legge immediatamente i dati ambient (AmbientManager)."""

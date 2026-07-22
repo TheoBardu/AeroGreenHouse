@@ -180,16 +180,28 @@ class AmbientManager():
         '''
         if self.is_running():
             return False
+        # Thread residuo di una lettura precedente gia' terminata
+        self._thread = None
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._read_loop, args=(on_update,), daemon=True)
         self._thread.start()
         return True
 
-    def stop_reading(self):
-        '''Arresta immediatamente la lettura temporizzata. False se non era in corso.'''
+    def stop_reading(self, timeout=5):
+        '''
+        Arresta immediatamente la lettura temporizzata. False se non era in corso.
+
+        Oltre a segnalare lo stop, attende la fine del thread e azzera subito
+        self._thread: senza questo is_running() resterebbe True finche' il
+        thread agonizza e "Attiva Lettura" rifiuterebbe di ripartire.
+        '''
         if not self.is_running():
             return False
         self._stop_event.set()
+        t = self._thread
+        self._thread = None
+        if t is not threading.current_thread():
+            t.join(timeout=timeout)
         return True
 
     def _read_loop(self, on_update):
@@ -205,61 +217,78 @@ class AmbientManager():
         dht = eval(f"adafruit_dht.DHT22(board.D{pin})")
 
         def measure_dht_22(dht):
-            while True:
+            '''
+            Ritenta finche' il DHT22 non risponde. I RuntimeError sono
+            frequentissimi sul Pi: l'attesa fra un tentativo e l'altro usa
+            _stop_event.wait() cosi' l'arresto e' immediato anche qui.
+            Ritorna (None, None) se e' stato richiesto lo stop.
+            '''
+            while not self._stop_event.is_set():
                 try:
                     T = dht.temperature
                     H = dht.humidity
                     # print('T = %4.2f C ;  H = %4.2f'%(T, H),'%', 'VPD = %5.4f kPa'%(self.VPD(T,H))) #For debug
                     return T, H
-                    break
                 except RuntimeError as error:
                     print(error.args[0])
-                    sleep(2.0)
+                    self._stop_event.wait(2.0)
                     continue
                 except Exception as error:
-                    dht.exit()
                     raise error
+            return None, None
 
-        while not self._stop_event.is_set():
-            try:
-                # Leggi i dati
-                temp, humidity = measure_dht_22(dht)
-                vpd = self.VPD(temp, humidity)
-
-                self.last_T = temp
-                self.last_H = humidity
-
-                # Ottieni timestamp
-                timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                file_name = datetime.now().strftime("%Y_%m_%d")
-
-                self.last_result = {'timestamp': timestamp, 'temperature': temp,
-                                    'humidity': humidity, 'vpd': vpd}
-
-                # Aggiorna GUI tramite callback
-                if on_update is not None:
-                    on_update(temp, humidity, vpd, timestamp)
-
-                self.logger.info(f"AMBIENT: T={temp:.2f}C, H={humidity:.2f}%, VPD={vpd:.4f}kPa")
-
-                # salva file
-                format_data_out = "%s\t %5.2fC\t %5.2f%%\t %5.4fkPa \n"
-                fid = open(self.configs.get('dht22', {}).get('saving_dir', '/home/fishnplants/Desktop/data/TH/') + 'TH_' + file_name + '.txt', 'a')
-                fid.write(format_data_out % (timestamp, temp, humidity, vpd))
-                fid.close()
-
-                # carica file online
+        try:
+            while not self._stop_event.is_set():
                 try:
-                    self.upload_data_on_web(temp, humidity, vpd, timestamp)
-                except:
-                    self.logger(f"AMBIENT: not able to upload the ambient data online. Check errors if occured")
+                    # Leggi i dati
+                    temp, humidity = measure_dht_22(dht)
+                    if temp is None or self._stop_event.is_set():
+                        break
+                    vpd = self.VPD(temp, humidity)
 
-                # Attendi l'intervallo (interrompibile)
-                self._stop_event.wait(interval)
+                    self.last_T = temp
+                    self.last_H = humidity
 
-            except Exception as e:
-                self.logger.error(f"Errore lettura AMBIENT: {str(e)}")
-                self._stop_event.wait(interval)
+                    # Ottieni timestamp
+                    timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    file_name = datetime.now().strftime("%Y_%m_%d")
+
+                    self.last_result = {'timestamp': timestamp, 'temperature': temp,
+                                        'humidity': humidity, 'vpd': vpd}
+
+                    # Aggiorna GUI tramite callback
+                    if on_update is not None:
+                        on_update(temp, humidity, vpd, timestamp)
+
+                    self.logger.info(f"AMBIENT: T={temp:.2f}C, H={humidity:.2f}%, VPD={vpd:.4f}kPa")
+
+                    # salva file
+                    format_data_out = "%s\t %5.2fC\t %5.2f%%\t %5.4fkPa \n"
+                    fid = open(self.configs.get('dht22', {}).get('saving_dir', '/home/fishnplants/Desktop/data/TH/') + 'TH_' + file_name + '.txt', 'a')
+                    fid.write(format_data_out % (timestamp, temp, humidity, vpd))
+                    fid.close()
+
+                    # carica file online (os.system e' bloccante: se e' gia'
+                    # stato chiesto lo stop lo saltiamo per uscire subito)
+                    if self._stop_event.is_set():
+                        break
+                    try:
+                        self.upload_data_on_web(temp, humidity, vpd, timestamp)
+                    except:
+                        self.logger.error(f"AMBIENT: not able to upload the ambient data online. Check errors if occured")
+
+                    # Attendi l'intervallo (interrompibile)
+                    self._stop_event.wait(interval)
+
+                except Exception as e:
+                    self.logger.error(f"Errore lettura AMBIENT: {str(e)}")
+                    self._stop_event.wait(interval)
+        finally:
+            # Libera il pin, altrimenti il riavvio della lettura fallisce
+            try:
+                dht.exit()
+            except Exception:
+                pass
 
         self.logger.info("Lettura AMBIENT interrotta")
 
