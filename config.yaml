@@ -6,6 +6,7 @@ dht22:
   read_interval: 300
   save: true
   saving_dir: /home/fishnplants/Desktop/data/TH/
+  max_retries: 5
 log:
   directory: /home/fishnplants/Desktop/
   filename: FnP_AeroGreenHouse
