@@ -212,38 +212,90 @@ class AmbientManager():
 
         interval = self.configs.get('dht22', {}).get('read_interval', 5)
         pin = self.configs.get('dht22', {}).get('pin', 27)
+        # Tentativi massimi di lettura per ciclo prima di arrendersi e
+        # ritentare al ciclo successivo (evita il retry infinito silenzioso).
+        max_retries = self.configs.get('dht22', {}).get('max_retries', 5)
 
         self.logger.info(f"Inizio lettura AMBIENT. Intervallo: {interval}s, Pin: {pin}")
-        dht = eval(f"adafruit_dht.DHT22(board.D{pin})")
 
-        def measure_dht_22(dht):
+        def make_dht():
+            '''Crea l'oggetto sensore. getattr al posto di eval (piu' sicuro).'''
+            return adafruit_dht.DHT22(getattr(board, f"D{pin}"))
+
+        def init_dht():
             '''
-            Ritenta finche' il DHT22 non risponde. I RuntimeError sono
-            frequentissimi sul Pi: l'attesa fra un tentativo e l'altro usa
-            _stop_event.wait() cosi' l'arresto e' immediato anche qui.
-            Ritorna (None, None) se e' stato richiesto lo stop.
+            Inizializza il sensore ritentando: se il pin e' ancora occupato da
+            una sessione precedente l'init fallisce, ma NON deve uccidere il
+            thread. Ritenta con attesa interrompibile finche' non riesce o
+            finche' non viene chiesto lo stop (in tal caso ritorna None).
             '''
             while not self._stop_event.is_set():
                 try:
-                    T = dht.temperature
-                    H = dht.humidity
+                    return make_dht()
+                except Exception as error:
+                    self.logger.warning(f"AMBIENT: init sensore fallito ({error}), ritento...")
+                    self._stop_event.wait(2.0)
+            return None
+
+        # dht e' gestito nel loop (puo' essere ricreato su fallimento
+        # persistente): usiamo una lista per poterlo riassegnare dalla closure.
+        dht_box = [None]
+
+        def measure_dht_22():
+            '''
+            Ritenta la lettura del DHT22 fino a max_retries volte. I RuntimeError
+            sono frequentissimi sul Pi: l'attesa fra un tentativo e l'altro usa
+            _stop_event.wait() cosi' l'arresto e' immediato anche qui.
+
+            Ritorna:
+              (T, H)        lettura riuscita
+              (None, None)  stop richiesto OPPURE fallimento dopo max_retries.
+                            Il chiamante distingue i due casi con _stop_event.
+            Su fallimento persistente ricrea il sensore (dht.exit + re-init)
+            per liberare un pin eventualmente latchato.
+            '''
+            attempts = 0
+            while not self._stop_event.is_set():
+                try:
+                    T = dht_box[0].temperature
+                    H = dht_box[0].humidity
                     # print('T = %4.2f C ;  H = %4.2f'%(T, H),'%', 'VPD = %5.4f kPa'%(self.VPD(T,H))) #For debug
                     return T, H
                 except RuntimeError as error:
-                    print(error.args[0])
+                    attempts += 1
+                    self.logger.warning(f"AMBIENT: lettura fallita ({error.args[0]}), tentativo {attempts}/{max_retries}")
+                    if attempts >= max_retries:
+                        self.logger.warning(f"AMBIENT: sensore non risponde dopo {max_retries} tentativi, ritento al prossimo ciclo")
+                        # Ricrea il sensore per liberare un pin latchato
+                        try:
+                            dht_box[0].exit()
+                        except Exception:
+                            pass
+                        new_dht = init_dht()
+                        if new_dht is None:
+                            return None, None  # stop richiesto durante il re-init
+                        dht_box[0] = new_dht
+                        return None, None  # fallimento ciclo: si ritenta al prossimo giro
                     self._stop_event.wait(2.0)
                     continue
-                except Exception as error:
-                    raise error
             return None, None
 
         try:
+            dht_box[0] = init_dht()
+            if dht_box[0] is None:
+                # Stop richiesto prima ancora di inizializzare il sensore
+                self.logger.info("Lettura AMBIENT interrotta")
+                return
             while not self._stop_event.is_set():
                 try:
                     # Leggi i dati
-                    temp, humidity = measure_dht_22(dht)
-                    if temp is None or self._stop_event.is_set():
-                        break
+                    temp, humidity = measure_dht_22()
+                    if self._stop_event.is_set():
+                        break  # stop reale richiesto
+                    if temp is None:
+                        # Fallimento del ciclo: NON uscire, ritenta al prossimo giro
+                        self._stop_event.wait(interval)
+                        continue
                     vpd = self.VPD(temp, humidity)
 
                     self.last_T = temp
@@ -286,7 +338,8 @@ class AmbientManager():
         finally:
             # Libera il pin, altrimenti il riavvio della lettura fallisce
             try:
-                dht.exit()
+                if dht_box[0] is not None:
+                    dht_box[0].exit()
             except Exception:
                 pass
 
