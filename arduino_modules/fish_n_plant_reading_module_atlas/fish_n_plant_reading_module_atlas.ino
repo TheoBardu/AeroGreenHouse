@@ -269,7 +269,13 @@ void handleReadPH(const char *nomeComando) {
 
   // Conversione in pH tramite la libreria, usando i punti di calibrazione
   // salvati (o quelli di default se non è mai stata fatta una CAL,x).
-  float ph = pH_probe.read_ph(voltage_mV);
+  float ph1 = pH_probe.read_ph(voltage_mV);
+  delay(1000);
+  float ph2 = pH_probe.read_ph(voltage_mV);
+  delay(1000);
+  float ph3 = pH_probe.read_ph(voltage_mV);
+  float ph = (ph1 + ph2 + ph3)/3
+
 
   Serial.print(nomeComando);
   Serial.print(":");
