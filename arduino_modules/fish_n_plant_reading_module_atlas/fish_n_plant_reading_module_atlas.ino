@@ -274,7 +274,7 @@ void handleReadPH(const char *nomeComando) {
   float ph2 = pH_probe.read_ph(voltage_mV);
   delay(1000);
   float ph3 = pH_probe.read_ph(voltage_mV);
-  float ph = (ph1 + ph2 + ph3)/3
+  float ph = (ph1 + ph2 + ph3)/3;
 
 
   Serial.print(nomeComando);
