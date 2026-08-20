@@ -15,6 +15,8 @@
   COMANDI SUPPORTATI (stringa + invio, terminata da '\n' o '\r'):
     read_pH   -> legge il pH con la sonda Atlas Scientific
                  (Surveyor V3.0 + Lab Grade pH Probe Gen 3)
+                 usando la libreria ufficiale Atlas Scientific
+                 "Surveyor" (ph_surveyor.h/.cpp + base_surveyor.h)
     read_water_level -> misura la distanza dal sensore HC-SR04
                        finché non trova l'eco (livello acqua / distanza)
 
@@ -30,8 +32,24 @@
   Esempio:
       read_pH:6.87
 
+  ----------------------------------------------------------------
+  CALIBRAZIONE pH (nuovo, grazie alla libreria Surveyor)
+  Invia da seriale uno di questi comandi con la sonda immersa nella
+  soluzione tampone corrispondente:
+      CAL,7      -> calibra il punto medio (pH 7)
+      CAL,4      -> calibra il punto basso (pH 4)
+      CAL,10     -> calibra il punto alto (pH 10)
+      CAL,CLEAR  -> azzera la calibrazione (torna ai valori di default)
+  I valori vengono salvati in EEPROM e ricaricati automaticamente al
+  prossimo avvio da pH_probe.begin() in setup().
+
   ================================================================
 */
+
+// Libreria ufficiale Atlas Scientific per il modulo Surveyor pH.
+// Deve trovarsi nella cartella dello sketch (o nella cartella libraries
+// di Arduino) insieme a ph_surveyor.cpp e base_surveyor.h.
+#include "ph_surveyor.h"
 
 // ================================================================
 // CONFIGURAZIONE SERIALE
@@ -67,7 +85,7 @@ void handleReadWaterLevel(const char *nomeComando);
 //        Serial.println(valore, decimali);   // oppure "ERR" se non valida
 // 2) Aggiungi la sua dichiarazione qui sopra e una riga alla tabella
 //    COMMANDS qui sotto, ad esempio:
-//        { "read_EC", handleReadEC },
+//        { "read_EC",          handleReadEC },
 // Non serve modificare loop(), setup() né processCommand(): il
 // dispatch generale li trova già da solo.
 // ------------------------------------------------------------------
@@ -80,38 +98,41 @@ const int N_COMMANDS = sizeof(COMMANDS) / sizeof(COMMANDS[0]);
 
 // Prototipi (funzioni usate prima della loro definizione nel file)
 void processCommand(const String &cmd);
+void parse_calibration_cmd(const String &cmd);
 float readPHVoltageAveraged();
-
 
 // ================================================================
 // CONFIGURAZIONE SONDA pH
 // (Atlas Scientific Surveyor V3.0 + Lab Grade pH Probe Gen 3)
 // ================================================================
-const int PH_PIN = A0;               // uscita "A" del Surveyor -> A0 Arduino
-const float PH_VCC = 5.0;            // tensione di riferimento ADC dell'Arduino UNO
-const int PH_ADC_RESOLUTION = 1023;  // risoluzione ADC 10 bit (0-1023)
+const int PH_PIN = A0;  // uscita "A" del Surveyor -> A0 Arduino
 
-// Range di tensione atteso in uscita dal Surveyor:
-//   0.265V -> pH 14      3.00V -> pH 0
+// Oggetto della libreria Surveyor: gestisce lettura voltaggio,
+// conversione in pH e calibrazione/EEPROM al posto nostro.
+Surveyor_pH pH_probe = Surveyor_pH(PH_PIN);
+
+// Range di tensione atteso in uscita dal Surveyor (in mV, perché
+// pH_probe.read_voltage() della libreria restituisce millivolt e non volt):
+//   265 mV -> pH 14      3000 mV -> pH 0
 // Il margine sotto/sopra serve solo a lasciare passare letture vicine ai
 // bordi senza scartarle; fuori da questo range la sonda è quasi certamente
 // scollegata o fuori scala.
-const float PH_V_MIN_VALID = 0.15;
-const float PH_V_MAX_VALID = 3.10;
-
+const float PH_MV_MIN_VALID = 150.0;
+const float PH_MV_MAX_VALID = 3100.0;
 
 //   "Response Time: 95% in 1s"
-// La lettura viene quindi mediata su un'INTERA finestra di 1000 ms (molti
-// campioni ravvicinati), invece che su pochi campioni presi in pochi
-// millisecondi come in un test rapido: è così che lo sketch rispetta il
-// tempo che lo strumento dichiara di richiedere per assestarsi prima che
-// il valore letto sia attendibile.
-const unsigned long PH_READ_WINDOW_MS = 5000;    // finestra totale di lettura [ms]
+// La lettura viene quindi mediata su un'INTERA finestra di 5000 ms (5
+// campioni distanziati di 1s), invece che sui pochi campioni ravvicinati
+// che pH_probe.read_voltage() fa già internamente (tutti nello stesso
+// istante): è così che lo sketch rispetta il tempo che lo strumento
+// dichiara di richiedere per assestarsi prima che il valore letto sia
+// attendibile.
+const unsigned long PH_READ_WINDOW_MS = 5000;      // finestra totale di lettura [ms]
 const unsigned long PH_SAMPLE_INTERVAL_MS = 1000;  // intervallo fra due campioni [ms]
 const int PH_N_SAMPLES = PH_READ_WINDOW_MS / PH_SAMPLE_INTERVAL_MS;  // N campioni
 
 // ================================================================
-// CONFIGURAZIONE sensore Ultrasonico
+// CONFIGURAZIONE sensore Ultrasonico per livello H2O
 // ================================================================
 // Connections:
 //   HC-SR04 VCC  -> Arduino 5V
@@ -119,11 +140,11 @@ const int PH_N_SAMPLES = PH_READ_WINDOW_MS / PH_SAMPLE_INTERVAL_MS;  // N campio
 //   HC-SR04 TRIG -> Arduino D2
 //   HC-SR04 ECHO -> Arduino D3
 
-#define TRIG_PIN 2   // pin collegato al TRIG del sensore (Arduino lo pilota in uscita)
-#define ECHO_PIN 3   // pin collegato all'ECHO del sensore (Arduino lo legge in ingresso)
+#define TRIG_PIN_WATER 2  // pin collegato al TRIG del sensore (Arduino lo pilota in uscita)
+#define ECHO_PIN_WATER 3  // pin collegato all'ECHO del sensore (Arduino lo legge in ingresso)
 
-long duration;       // durata dell'impulso di eco, in microsecondi
-float distance_cm;   // distanza calcolata, in centimetri
+long duration;      // durata dell'impulso di eco, in microsecondi
+float distance_cm;  // distanza calcolata, in centimetri
 
 
 // ================================================================
@@ -134,8 +155,17 @@ String inputCommand = "";  // buffer per il comando in arrivo da seriale
 void setup() {
   Serial.begin(BAUDRATE);
   Serial.println("FnP fish_n_plant_reading_module pronto.");
-  pinMode(TRIG_PIN, OUTPUT); // Arduino invia l'impulso di trigger
-  pinMode(ECHO_PIN, INPUT);  // Arduino riceve la risposta (eco)
+  pinMode(TRIG_PIN_WATER, OUTPUT);  // Arduino invia l'impulso di trigger
+  pinMode(ECHO_PIN_WATER, INPUT);   // Arduino riceve la risposta (eco)
+
+  // Carica dalla EEPROM l'ultima calibrazione pH salvata (se presente).
+  // Se non c'è mai stata una calibrazione, la libreria usa i suoi valori
+  // di default e begin() ritorna false: non è un errore bloccante.
+  if (pH_probe.begin()) {
+    Serial.println("pH: calibrazione caricata da EEPROM.");
+  } else {
+    Serial.println("pH: nessuna calibrazione salvata, uso valori di default.");
+  }
 }
 
 void loop() {
@@ -166,7 +196,16 @@ void loop() {
 // corrispondente. È l'UNICO punto dello sketch che deve conoscere tutti
 // i comandi disponibili, ed è già pronto per la tabella COMMANDS futura:
 // aggiungere un comando non richiede toccare questa funzione.
+// Gestisce anche i comandi di calibrazione pH (CAL,7 / CAL,4 / CAL,10 /
+// CAL,CLEAR), che non stanno nella tabella COMMANDS perché non seguono
+// il protocollo "<comando>:<valore>" ma restituiscono solo un messaggio
+// di conferma testuale al Raspberry.
 void processCommand(const String &cmd) {
+  if (cmd.startsWith("CAL,") || cmd.startsWith("cal,")) {
+    parse_calibration_cmd(cmd);
+    return;
+  }
+
   for (int i = 0; i < N_COMMANDS; i++) {
     if (cmd.equalsIgnoreCase(COMMANDS[i].name)) {
       COMMANDS[i].handler(COMMANDS[i].name);
@@ -182,48 +221,74 @@ void processCommand(const String &cmd) {
 }
 
 // ================================================================
+// COMANDI DI CALIBRAZIONE pH (CAL,7 / CAL,4 / CAL,10 / CAL,CLEAR)
+// ================================================================
+// Usa direttamente le funzioni di calibrazione della libreria Surveyor,
+// che leggono la tensione attuale e la salvano in EEPROM come punto di
+// riferimento per pH 7 (mid), pH 4 (low) o pH 10 (high).
+void parse_calibration_cmd(const String &cmd) {
+  String upper = cmd;
+  upper.toUpperCase();
+
+  if (upper == "CAL,7") {
+    pH_probe.cal_mid();
+    Serial.println("MID CALIBRATED");
+  } else if (upper == "CAL,4") {
+    pH_probe.cal_low();
+    Serial.println("LOW CALIBRATED");
+  } else if (upper == "CAL,10") {
+    pH_probe.cal_high();
+    Serial.println("HIGH CALIBRATED");
+  } else if (upper == "CAL,CLEAR") {
+    pH_probe.cal_clear();
+    Serial.println("CALIBRATION CLEARED");
+  } else {
+    Serial.print("ERR:");
+    Serial.println(cmd);
+  }
+}
+
+// ================================================================
 // COMANDO: read_pH
 // ================================================================
 // Sonda Atlas Scientific Surveyor V3.0 + Lab Grade pH Probe (Gen 3).
-// Metodo di lettura e formula di conversione presi da
-// lettura_pH_Surveyor.ino (FnP), confermati dalla pagina Notion
-// "pH and EC": https://app.notion.com/p/pH-and-EC-3bdeec0d28bc80fdb120ccff0dacd762
+// La lettura del voltaggio e la conversione in pH sono ora delegate
+// alla libreria ufficiale Surveyor (pH_probe.read_voltage() /
+// pH_probe.read_ph()), che usa i punti di calibrazione salvati in
+// EEPROM invece della formula lineare fissa usata in precedenza.
 void handleReadPH(const char *nomeComando) {
-  float voltage = readPHVoltageAveraged();
+  float voltage_mV = readPHVoltageAveraged();
 
-  // Fuori dal range di uscita fisico del Surveyor (0.265V-3.00V, con
-  // margine): la lettura non è attendibile, es. sonda scollegata o non
-  // ancora immersa.
-  if (voltage < PH_V_MIN_VALID || voltage > PH_V_MAX_VALID) {
+  // Fuori dal range di uscita fisico del Surveyor (con margine): la
+  // lettura non è attendibile, es. sonda scollegata o non ancora immersa.
+  if (voltage_mV < PH_MV_MIN_VALID || voltage_mV > PH_MV_MAX_VALID) {
     Serial.print(nomeComando);
     Serial.println(":ERR");
     return;
   }
 
-  // Equazione dal datasheet Atlas Scientific, riportata anche su Notion
-  // FnP "pH and EC":  pH = (-5.6548 * V) + 15.509
-  // (accuratezza finale dichiarata: ±0.2 punti di pH)
-  float ph = (-5.6548 * voltage) + 15.509;
+  // Conversione in pH tramite la libreria, usando i punti di calibrazione
+  // salvati (o quelli di default se non è mai stata fatta una CAL,x).
+  float ph = pH_probe.read_ph(voltage_mV);
 
   Serial.print(nomeComando);
   Serial.print(":");
   Serial.println(ph, 2);  // 2 cifre decimali, come nello sketch di partenza
 }
 
-// Media la tensione letta su A0 lungo l'intera finestra di risposta della
-// sonda (PH_READ_WINDOW_MS = 1000 ms), invece che su pochi campioni
-// ravvicinati: è il modo in cui lo sketch "aspetta" il tempo che lo
-// strumento dichiara di richiedere per assestarsi (Notion "pH and EC":
-// Response Time 95% in 1s) prima di considerare buona la lettura, oltre
-// a ridurre il rumore sul segnale analogico.
+// Media la tensione letta dalla sonda lungo l'intera finestra di risposta
+// (PH_READ_WINDOW_MS = 5000 ms, un campione al secondo), invece che sui
+// pochi campioni ravvicinati che pH_probe.read_voltage() fa già da sola
+// internamente: è il modo in cui lo sketch "aspetta" il tempo che lo
+// strumento dichiara di richiedere per assestarsi (Response Time 95% in
+// 1s) prima di considerare buona la lettura, oltre a ridurre il rumore.
 float readPHVoltageAveraged() {
-  long sum = 0;
+  float sum_mV = 0;
   for (int i = 0; i < PH_N_SAMPLES; i++) {
-    sum += analogRead(PH_PIN);
+    sum_mV += pH_probe.read_voltage();
     delay(PH_SAMPLE_INTERVAL_MS);
   }
-  float adcAverage = (float)sum / PH_N_SAMPLES;
-  return adcAverage * (PH_VCC / PH_ADC_RESOLUTION);
+  return sum_mV / PH_N_SAMPLES;
 }
 
 // ================================================================
@@ -233,16 +298,16 @@ float readPHVoltageAveraged() {
 // sul seriale nel formato "<comando>:<valore>".
 void handleReadWaterLevel(const char *nomeComando) {
   // 1) Porta il TRIG basso per un istante
-  digitalWrite(TRIG_PIN, LOW);
+  digitalWrite(TRIG_PIN_WATER, LOW);
   delayMicroseconds(2);
 
   // 2) Impulso di TRIG di 10 microsecondi
-  digitalWrite(TRIG_PIN, HIGH);
+  digitalWrite(TRIG_PIN_WATER, HIGH);
   delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
+  digitalWrite(TRIG_PIN_WATER, LOW);
 
   // 3) Misura il tempo di ECHO alto
-  duration = pulseIn(ECHO_PIN, HIGH);
+  duration = pulseIn(ECHO_PIN_WATER, HIGH);
 
   // Se non arriva nessun eco, la lettura non è valida
   if (duration == 0) {

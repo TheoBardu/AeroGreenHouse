@@ -88,7 +88,7 @@ float readPHVoltageAveraged();
 // (Atlas Scientific Surveyor V3.0 + Lab Grade pH Probe Gen 3)
 // ================================================================
 const int PH_PIN = A0;               // uscita "A" del Surveyor -> A0 Arduino
-const float PH_VCC = 5.0;            // tensione di riferimento ADC dell'Arduino UNO
+const float PH_VCC = 3.3;            // tensione di riferimento ADC dell'Arduino UNO
 const int PH_ADC_RESOLUTION = 1023;  // risoluzione ADC 10 bit (0-1023)
 
 // Range di tensione atteso in uscita dal Surveyor:
@@ -119,8 +119,8 @@ const int PH_N_SAMPLES = PH_READ_WINDOW_MS / PH_SAMPLE_INTERVAL_MS;  // N campio
 //   HC-SR04 TRIG -> Arduino D2
 //   HC-SR04 ECHO -> Arduino D3
 
-#define TRIG_PIN 2   // pin collegato al TRIG del sensore (Arduino lo pilota in uscita)
-#define ECHO_PIN 3   // pin collegato all'ECHO del sensore (Arduino lo legge in ingresso)
+#define TRIG_PIN_WATER 2   // pin collegato al TRIG del sensore (Arduino lo pilota in uscita)
+#define ECHO_PIN_WATER 3   // pin collegato all'ECHO del sensore (Arduino lo legge in ingresso)
 
 long duration;       // durata dell'impulso di eco, in microsecondi
 float distance_cm;   // distanza calcolata, in centimetri
@@ -134,8 +134,8 @@ String inputCommand = "";  // buffer per il comando in arrivo da seriale
 void setup() {
   Serial.begin(BAUDRATE);
   Serial.println("FnP fish_n_plant_reading_module pronto.");
-  pinMode(TRIG_PIN, OUTPUT); // Arduino invia l'impulso di trigger
-  pinMode(ECHO_PIN, INPUT);  // Arduino riceve la risposta (eco)
+  pinMode(TRIG_PIN_WATER, OUTPUT); // Arduino invia l'impulso di trigger
+  pinMode(ECHO_PIN_WATER, INPUT);  // Arduino riceve la risposta (eco)
 }
 
 void loop() {
@@ -233,16 +233,16 @@ float readPHVoltageAveraged() {
 // sul seriale nel formato "<comando>:<valore>".
 void handleReadWaterLevel(const char *nomeComando) {
   // 1) Porta il TRIG basso per un istante
-  digitalWrite(TRIG_PIN, LOW);
+  digitalWrite(TRIG_PIN_WATER, LOW);
   delayMicroseconds(2);
 
   // 2) Impulso di TRIG di 10 microsecondi
-  digitalWrite(TRIG_PIN, HIGH);
+  digitalWrite(TRIG_PIN_WATER, HIGH);
   delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
+  digitalWrite(TRIG_PIN_WATER, LOW);
 
   // 3) Misura il tempo di ECHO alto
-  duration = pulseIn(ECHO_PIN, HIGH);
+  duration = pulseIn(ECHO_PIN_WATER, HIGH);
 
   // Se non arriva nessun eco, la lettura non è valida
   if (duration == 0) {
