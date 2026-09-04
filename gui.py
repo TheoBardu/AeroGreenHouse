@@ -1,6 +1,7 @@
 #! /usr/bin/python3
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import font as tkfont
 import yaml
 import os
 import sys
@@ -24,6 +25,67 @@ class GUILoggingHandler(logging.Handler):
             self.log_queue.put((msg, record.levelname))
         except Exception:
             self.handleError(record)
+
+
+class Card(tk.Frame):
+    """
+    Contenitore piatto: superficie bianca, bordo sottile, titolo in
+    maiuscoletto tenue. Sostituisce ttk.LabelFrame.
+
+    Tk non sa disegnare angoli arrotondati (ne' ombre) su un Frame: farlo
+    richiederebbe un Canvas ridisegnato a ogni <Configure>, che su Raspberry Pi
+    si sente durante il ridimensionamento. La card resta quindi un rettangolo
+    con bordo da 1px, ottenuto con highlightthickness (non con relief, che su
+    'clam' disegna un incavo 3D).
+
+    I widget si aggiungono a questo oggetto come si facevano dentro un
+    LabelFrame; pack/grid vengono invece inoltrati al guscio esterno, che e'
+    quello che porta bordo e padding. Cosi' i chiamanti restano invariati.
+    """
+
+    def __init__(self, parent, titolo=None, bg='#ffffff', border='#e6eae8',
+                 title_fg='#7c8a83', title_font=('DejaVu Sans', 9, 'bold'),
+                 padding=14, icona=None, icona_bg=None, icona_fg=None):
+        self._shell = tk.Frame(parent, bg=bg, highlightthickness=1,
+                               highlightbackground=border, highlightcolor=border,
+                               bd=0)
+
+        if titolo:
+            head = tk.Frame(self._shell, bg=bg)
+            head.pack(fill=tk.X, padx=padding, pady=(padding, 0))
+            if icona:
+                tk.Label(head, text=icona, bg=icona_bg or bg, fg=icona_fg or title_fg,
+                         font=(title_font[0], 11), width=2,
+                         padx=2, pady=2).pack(side=tk.LEFT, padx=(0, 8))
+            # Maiuscoletto solo sui titoli brevi: in maiuscolo una riga lunga
+            # come "Serbatoio (Tank) - sensore ultrasonico HC-SR04" urlerebbe.
+            etichetta = titolo.upper() if len(titolo) <= 24 else titolo
+            tk.Label(head, text=etichetta, bg=bg, fg=title_fg,
+                     font=title_font).pack(side=tk.LEFT)
+            self.head = head
+        else:
+            self.head = None
+
+        super().__init__(self._shell, bg=bg)
+        # NB: tk.Frame.pack esplicito — self.pack e' ridefinito piu' sotto per
+        # posizionare il guscio, non il corpo.
+        tk.Frame.pack(self, fill=tk.BOTH, expand=True,
+                      padx=padding, pady=(8 if titolo else padding, padding))
+
+    # -- geometria: inoltrata al guscio -------------------------------------
+    def pack(self, **kw):
+        self._shell.pack(**kw)
+        return self
+
+    def grid(self, **kw):
+        self._shell.grid(**kw)
+        return self
+
+    def pack_forget(self):
+        self._shell.pack_forget()
+
+    def grid_forget(self):
+        self._shell.grid_forget()
 
 
 class AeroGreenHouseGUI:
@@ -119,16 +181,48 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     # Stile / struttura interfaccia
     # ------------------------------------------------------------------
+    def _pick_font(self, candidati, fallback):
+        """
+        Primo font disponibile tra `candidati`.
+
+        Su Raspberry Pi OS c'e' DejaVu; altrove (macchina di sviluppo) puo' non
+        esserci, e Tk sostituirebbe in silenzio con una famiglia qualsiasi.
+        """
+        disponibili = set(tkfont.families())
+        for nome in candidati:
+            if nome in disponibili:
+                return nome
+        return fallback
+
     def setup_style(self):
         """Definisce una palette coerente e uno stile leggero (adatto a Raspberry Pi)."""
-        self.COL_BG = "#eef2ee"
-        self.COL_HEADER = "#1b5e20"
-        self.COL_PRIMARY = "#2e7d32"
-        self.COL_ACCENT = "#388e3c"
-        self.COL_OK = "#2e9e2e"     # spia verde
-        self.COL_BAD = "#c62828"    # spia rossa
-        self.COL_WARN = "#b26a00"   # spia arancione
-        self.COL_TEXT = "#1f2d27"
+        # Palette del mockup (Presentazione/Mok-up/AeroGreenHouse UI.html).
+        # I nomi COL_* restano quelli di prima: sono usati in tutto il file.
+        self.COL_BG = "#f5f8f6"       # sfondo applicazione
+        self.COL_CARD = "#ffffff"     # superficie delle card e della sidebar
+        self.COL_BORDER = "#e6eae8"   # bordo delle card
+        self.COL_DIV = "#f0f3f1"      # separatore fra righe di una lista
+        self.COL_HEADER = "#1f7a45"   # verde scuro (logo, accenti forti)
+        self.COL_PRIMARY = "#1f7a45"
+        self.COL_ACCENT = "#2e9e5b"
+        self.COL_SOFT = "#eaf5ee"     # verde tenue (chip, voce di menu attiva)
+        self.COL_HOVER = "#eef4f0"
+        self.COL_OK = "#1f7a45"       # spia verde
+        self.COL_BAD = "#c62828"      # spia rossa
+        self.COL_WARN = "#c4650a"     # spia arancione
+        self.COL_WARN_BG = "#fdf0e0"
+        self.COL_BLUE = "#1c7fa3"     # acqua / umidita'
+        self.COL_BLUE_BG = "#e6f4fa"
+        self.COL_TEXT = "#16211c"     # testo primario
+        self.COL_MUTED = "#6d7b74"    # testo secondario
+        self.COL_FAINT = "#7c8a83"    # etichette in maiuscoletto
+
+        # Il mockup usa Instrument Sans + IBM Plex Mono: non sono installati sul
+        # Pi, DejaVu ha proporzioni vicine ed e' sempre presente.
+        self.FONT_UI = self._pick_font(
+            ('Instrument Sans', 'DejaVu Sans', 'Helvetica Neue'), 'Arial')
+        self.FONT_MONO = self._pick_font(
+            ('IBM Plex Mono', 'DejaVu Sans Mono', 'Menlo'), 'Courier')
 
         # Colore dello stato della pianta. Le chiavi sono quelle di
         # classifica_mcari2: le soglie numeriche restano nel modulo del sensore.
@@ -139,114 +233,248 @@ class AeroGreenHouseGUI:
             spectro.STATO_MOLTO_SANA: self.COL_HEADER,
         }
 
+        # Sfondo tenue della pill di stato, abbinato a MCARI2_COLORS
+        self.MCARI2_CHIP_BG = {
+            spectro.STATO_STRESS: "#fdecec",
+            spectro.STATO_LIMITE: self.COL_WARN_BG,
+            spectro.STATO_SANA: self.COL_SOFT,
+            spectro.STATO_MOLTO_SANA: self.COL_SOFT,
+        }
+
         style = ttk.Style()
         try:
             style.theme_use('clam')
         except tk.TclError:
             pass
 
-        style.configure('.', background=self.COL_BG, foreground=self.COL_TEXT, font=('Arial', 10))
-        style.configure('TFrame', background=self.COL_BG)
-        style.configure('TLabel', background=self.COL_BG)
-        style.configure('TLabelframe', background=self.COL_BG, borderwidth=1, relief='groove')
-        style.configure('TLabelframe.Label', background=self.COL_BG,
-                        foreground=self.COL_PRIMARY, font=('Arial', 11, 'bold'))
-        # tabposition 'wn': schede impilate a sinistra (w) e allineate in alto
-        # (n). Con dieci schede una fila orizzontale non ci sta piu' in
-        # larghezza; il testo resta orizzontale, cambia solo la disposizione.
-        style.configure('TNotebook', background=self.COL_BG, borderwidth=0,
-                        tabposition='wn')
-        style.configure('TNotebook.Tab', padding=[14, 9], width=18,
-                        anchor=tk.W, font=('Arial', 10, 'bold'))
-        style.map('TNotebook.Tab',
-                  background=[('selected', self.COL_BG), ('!selected', '#cdd8cd')],
-                  foreground=[('selected', self.COL_PRIMARY)])
-        style.configure('TButton', padding=6)
-        style.configure('Accent.TButton', background=self.COL_ACCENT,
-                        foreground='white', font=('Arial', 10, 'bold'))
-        style.map('Accent.TButton', background=[('active', self.COL_PRIMARY)])
+        # I widget ttk vivono quasi sempre dentro una Card, quindi lo sfondo di
+        # default e' quello della card (bianco). Le poche superfici grigie
+        # (l'area scrollabile, le fasce fra le card) sono tk.Frame con bg
+        # esplicito: vedi _make_scrollable e _screen_body.
+        style.configure('.', background=self.COL_CARD, foreground=self.COL_TEXT,
+                        font=(self.FONT_UI, 10))
+        style.configure('TFrame', background=self.COL_CARD)
+        style.configure('TLabel', background=self.COL_CARD)
+        style.configure('Muted.TLabel', background=self.COL_CARD, foreground=self.COL_MUTED)
+        style.configure('Caption.TLabel', background=self.COL_CARD,
+                        foreground=self.COL_FAINT, font=(self.FONT_UI, 9))
+        style.configure('Metric.TLabel', background=self.COL_CARD,
+                        font=(self.FONT_MONO, 30))
+
+        # Bottoni: pieni per le azioni primarie, contorno tenue per le altre.
+        style.configure('TButton', padding=(14, 7), relief='flat', borderwidth=1,
+                        background=self.COL_CARD, foreground=self.COL_TEXT,
+                        bordercolor=self.COL_BORDER, font=(self.FONT_UI, 10))
+        style.map('TButton',
+                  background=[('active', self.COL_HOVER), ('pressed', self.COL_HOVER)],
+                  bordercolor=[('active', self.COL_ACCENT)])
+        style.configure('Accent.TButton', background=self.COL_PRIMARY,
+                        foreground='white', bordercolor=self.COL_PRIMARY,
+                        font=(self.FONT_UI, 10, 'bold'))
+        style.map('Accent.TButton',
+                  background=[('active', self.COL_ACCENT), ('pressed', self.COL_ACCENT)],
+                  foreground=[('active', 'white')])
         style.configure('Stop.TButton', background=self.COL_BAD,
-                        foreground='white', font=('Arial', 10, 'bold'))
-        style.map('Stop.TButton', background=[('active', '#a01818')])
-        style.configure('Treeview', background='white', fieldbackground='white', rowheight=26)
-        style.configure('Treeview.Heading', background=self.COL_PRIMARY,
-                        foreground='white', font=('Arial', 10, 'bold'))
-        style.configure('TProgressbar', background=self.COL_ACCENT, troughcolor='#d6e0d6')
+                        foreground='white', bordercolor=self.COL_BAD,
+                        font=(self.FONT_UI, 10, 'bold'))
+        style.map('Stop.TButton',
+                  background=[('active', '#a01818'), ('pressed', '#a01818')],
+                  foreground=[('active', 'white')])
+
+        # Campi: bordo sottile, nessun incavo 3D
+        for stile in ('TEntry', 'TCombobox', 'TSpinbox'):
+            style.configure(stile, fieldbackground='white', background='white',
+                            foreground=self.COL_TEXT, bordercolor=self.COL_BORDER,
+                            lightcolor=self.COL_BORDER, darkcolor=self.COL_BORDER,
+                            relief='flat', padding=4)
+            style.map(stile, bordercolor=[('focus', self.COL_ACCENT)])
+
+        style.configure('Treeview', background='white', fieldbackground='white',
+                        foreground=self.COL_TEXT, rowheight=28, borderwidth=0,
+                        font=(self.FONT_UI, 10))
+        style.configure('Treeview.Heading', background=self.COL_CARD,
+                        foreground=self.COL_FAINT, relief='flat', borderwidth=0,
+                        padding=(6, 8), font=(self.FONT_UI, 9, 'bold'))
+        style.map('Treeview.Heading', background=[('active', self.COL_HOVER)])
+        style.map('Treeview', background=[('selected', self.COL_SOFT)],
+                  foreground=[('selected', self.COL_PRIMARY)])
+
+        style.configure('TProgressbar', background=self.COL_ACCENT,
+                        troughcolor=self.COL_DIV, bordercolor=self.COL_DIV,
+                        lightcolor=self.COL_ACCENT, darkcolor=self.COL_ACCENT,
+                        thickness=8, borderwidth=0)
+        style.configure('Vertical.TScrollbar', background=self.COL_BORDER,
+                        troughcolor=self.COL_BG, bordercolor=self.COL_BG,
+                        arrowcolor=self.COL_FAINT, relief='flat')
 
         self.root.configure(bg=self.COL_BG)
+
+    # ------------------------------------------------------------------
+    # Mattoncini dell'interfaccia
+    # ------------------------------------------------------------------
+    def _card(self, parent, titolo=None, icona=None, icona_bg=None, icona_fg=None,
+              padding=14):
+        """Card bianca con bordo sottile. Sostituisce ttk.LabelFrame."""
+        return Card(parent, titolo=titolo, bg=self.COL_CARD, border=self.COL_BORDER,
+                    title_fg=self.COL_FAINT, title_font=(self.FONT_UI, 9, 'bold'),
+                    padding=padding, icona=icona, icona_bg=icona_bg, icona_fg=icona_fg)
+
+    def _chip(self, parent, testo, fg, bg):
+        """
+        Pill di stato.
+
+        Tk non arrotonda un Label: la pill e' un rettangolo con padding
+        generoso, che a queste dimensioni legge comunque come badge.
+        """
+        return tk.Label(parent, text=testo, bg=bg, fg=fg, font=(self.FONT_UI, 10, 'bold'),
+                        padx=12, pady=5)
+
+    # Schermate: (chiave, icona, voce di menu, titolo, sottotitolo, costruttore).
+    # Sostituisce la lista di notebook.add(): l'ordine e i contenuti sono gli
+    # stessi delle vecchie schede, cambia solo il modo di raggiungerle.
+    SCREENS = (
+        ('riepilogo', '\u25a6', 'Riepilogo', 'Riepilogo',
+         'Ultimo valore di ogni sensore e processi in esecuzione.',
+         'create_riepilogo_tab'),
+        ('config', '\u2699', 'Configurazione', 'Configurazione',
+         'Parametri di sensori, job e sistema (config.yaml).',
+         'create_config_tab'),
+        ('status', '\u25c9', 'Processi', 'Processi attivi',
+         'Stato di job, letture periodiche e acquisizioni.',
+         'create_status_tab'),
+        ('jobs', '\u26a1', 'Job', 'Gestione job',
+         'Pompe e attuatori pilotati dai pin GPIO.',
+         'create_jobs_tab'),
+        ('ambient', '\U0001f321', 'Ambiente', 'Ambiente',
+         'Temperatura, umidita\u0300 e VPD dal DHT22, con la sintesi giornaliera.',
+         'create_ambient_tab'),
+        ('clima', '\u2744', 'Clima', 'Climatizzatore',
+         'Controllo automatico del condizionatore via infrarossi.',
+         'create_climatizzatore_tab'),
+        ('tank', '\U0001f4a7', 'Serbatoio', 'Livelli serbatoio',
+         'Volume e riempimento misurati dal sensore ultrasonico.',
+         'create_tank_tab'),
+        ('spectro', '\u25d0', 'Spettro', 'Spettrometro',
+         'Indice MCARI2 e stato di salute della coltura.',
+         'create_spectro_tab'),
+        ('growth', '\U0001f331', 'Crescita', 'Crescita',
+         'Altezza della pianta e andamento nel tempo.',
+         'create_growth_tab'),
+        ('camera', '\U0001f4f7', 'Camera', 'Camera',
+         'Acquisizione periodica delle foto e anteprima dal vivo.',
+         'create_camera_tab'),
+        ('log', '\u2263', 'Log', 'Log e output',
+         'Messaggi del sistema e file di log.',
+         'create_output_tab'),
+    )
 
     def create_widgets(self):
         """Crea l'interfaccia grafica (sola UI)."""
         self.setup_style()
 
-        # Header
-        header = tk.Frame(self.root, bg=self.COL_HEADER, height=58)
-        header.pack(fill=tk.X, side=tk.TOP)
-        header.pack_propagate(False)
-        tk.Label(header, text="🌱 AeroGreenHouse", bg=self.COL_HEADER, fg="white",
-                 font=('Arial', 18, 'bold')).pack(side=tk.LEFT, padx=18)
-        self.header_clock = tk.Label(header, text="", bg=self.COL_HEADER,
-                                     fg="#c8e6c9", font=('Arial', 11))
-        self.header_clock.pack(side=tk.RIGHT, padx=18)
+        self._nav_buttons = {}
+        self._screens = {}
+        self._current_screen = None
 
-        # Notebook (tab widget)
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self._build_sidebar()
 
-        # Tab 1: Riepilogo (sintesi di tutte le altre schede)
-        riepilogo_frame = ttk.Frame(notebook)
-        notebook.add(riepilogo_frame, text="Riepilogo")
-        self.create_riepilogo_tab(riepilogo_frame)
+        # Colonna di destra: intestazione + area delle schermate
+        main = tk.Frame(self.root, bg=self.COL_BG)
+        main.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Tab 2: Configurazione (generalità)
-        config_frame = ttk.Frame(notebook)
-        notebook.add(config_frame, text="Configurazione")
-        self.create_config_tab(config_frame)
+        self._build_header(main)
 
-        # Tab 3: Processi Attivi
-        status_frame = ttk.Frame(notebook)
-        notebook.add(status_frame, text="Processi Attivi")
-        self.create_status_tab(status_frame)
+        content = tk.Frame(main, bg=self.COL_BG)
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        content.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
 
-        # Tab 4: Gestione Job
-        jobs_frame = ttk.Frame(notebook)
-        notebook.add(jobs_frame, text="Gestione Job")
-        self.create_jobs_tab(jobs_frame)
+        # Come il Notebook di prima, tutte le schermate nascono all'avvio e
+        # restano vive: cambiare pagina e' solo un tkraise, senza ricostruzioni.
+        for key, _icona, _voce, _titolo, _sub, builder in self.SCREENS:
+            frame = tk.Frame(content, bg=self.COL_BG)
+            frame.grid(row=0, column=0, sticky=tk.NSEW)
+            self._screens[key] = frame
+            getattr(self, builder)(frame)
 
-        # Tab 5: TH and VPD (ambient)
-        ambient_frame = ttk.Frame(notebook)
-        notebook.add(ambient_frame, text="Ambient")
-        self.create_ambient_tab(ambient_frame)
+        self._show_screen(self.SCREENS[0][0])
 
-        # Tab 6: IR controller
-        ir_frame = ttk.Frame(notebook)
-        notebook.add(ir_frame, text="Climatizzatore")
-        self.create_climatizzatore_tab(ir_frame)
+    def _build_sidebar(self):
+        """Barra laterale a icone: sostituisce la fila di schede del Notebook."""
+        bar = tk.Frame(self.root, bg=self.COL_CARD, width=84)
+        bar.pack(side=tk.LEFT, fill=tk.Y)
+        bar.pack_propagate(False)
+        # Bordo destro: una riga di 1px, piu' economica di un highlight sul frame
+        tk.Frame(self.root, bg=self.COL_BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y)
 
-        # Tab 7: Livelli Serbatoio
-        tank_frame = ttk.Frame(notebook)
-        notebook.add(tank_frame, text="Livelli Serbatoio")
-        self.create_tank_tab(tank_frame)
+        tk.Label(bar, text='\U0001f331', bg=self.COL_PRIMARY, fg='white',
+                 font=(self.FONT_UI, 16), width=2, height=1).pack(pady=(18, 16))
 
-        # Tab 8: Spettrometro (MCARI2)
-        spectro_frame = ttk.Frame(notebook)
-        notebook.add(spectro_frame, text="Spettrometro")
-        self.create_spectro_tab(spectro_frame)
+        for key, icona, voce, _titolo, _sub, _builder in self.SCREENS:
+            b = tk.Label(bar, text=f"{icona}\n{voce}", bg=self.COL_CARD,
+                         fg=self.COL_MUTED, font=(self.FONT_UI, 8),
+                         width=9, pady=6, cursor='hand2')
+            b.pack(pady=1)
+            b.bind('<Button-1>', lambda e, k=key: self._show_screen(k))
+            b.bind('<Enter>', lambda e, k=key: self._nav_hover(k, True))
+            b.bind('<Leave>', lambda e, k=key: self._nav_hover(k, False))
+            self._nav_buttons[key] = b
 
-        # Tab 9: Crescita (altezza pianta)
-        growth_frame = ttk.Frame(notebook)
-        notebook.add(growth_frame, text="Crescita")
-        self.create_growth_tab(growth_frame)
+        # Spia di sistema in fondo, come il pallino del mockup
+        tk.Frame(bar, bg=self.COL_CARD).pack(fill=tk.BOTH, expand=True)
+        self.nav_pulse = tk.Label(bar, text='\u25cf', bg=self.COL_CARD,
+                                  fg=self.COL_ACCENT, font=(self.FONT_UI, 12))
+        self.nav_pulse.pack(pady=(0, 16))
 
-        # Tab 10: Camera
-        camera_frame = ttk.Frame(notebook)
-        notebook.add(camera_frame, text="Camera")
-        self.create_camera_tab(camera_frame)
+    def _nav_hover(self, key, dentro):
+        """Evidenzia la voce di menu sotto il puntatore (non quella attiva)."""
+        if key == self._current_screen:
+            return
+        self._nav_buttons[key].config(bg=self.COL_HOVER if dentro else self.COL_CARD)
 
-        # Tab 11: Output/Log
-        output_frame = ttk.Frame(notebook)
-        notebook.add(output_frame, text="Output/Log")
-        self.create_output_tab(output_frame)
+    def _build_header(self, parent):
+        """Intestazione: briciole di pane, titolo della schermata, orologio."""
+        head = tk.Frame(parent, bg=self.COL_BG)
+        head.pack(fill=tk.X, padx=20, pady=(18, 14))
+
+        sinistra = tk.Frame(head, bg=self.COL_BG)
+        sinistra.pack(side=tk.LEFT, anchor=tk.W)
+
+        tk.Label(sinistra, text="FISH & PLANTS   /   AEROGREENHOUSE", bg=self.COL_BG,
+                 fg=self.COL_FAINT, font=(self.FONT_UI, 8, 'bold')).pack(anchor=tk.W)
+        self.header_title = tk.Label(sinistra, text="", bg=self.COL_BG,
+                                     fg=self.COL_TEXT, font=(self.FONT_UI, 22))
+        self.header_title.pack(anchor=tk.W, pady=(4, 0))
+        self.header_sub = tk.Label(sinistra, text="", bg=self.COL_BG,
+                                   fg=self.COL_MUTED, font=(self.FONT_UI, 10))
+        self.header_sub.pack(anchor=tk.W, pady=(3, 0))
+
+        destra = tk.Frame(head, bg=self.COL_BG)
+        destra.pack(side=tk.RIGHT, anchor=tk.E)
+        self.header_clock = tk.Label(destra, text="", bg=self.COL_CARD,
+                                     fg=self.COL_MUTED, font=(self.FONT_MONO, 10),
+                                     padx=14, pady=7, highlightthickness=1,
+                                     highlightbackground=self.COL_BORDER)
+        self.header_clock.pack(side=tk.RIGHT)
+
+    def _show_screen(self, key):
+        """Porta in primo piano una schermata e aggiorna menu e intestazione."""
+        if key == self._current_screen:
+            return
+
+        if self._current_screen is not None:
+            self._nav_buttons[self._current_screen].config(
+                bg=self.COL_CARD, fg=self.COL_MUTED)
+
+        self._current_screen = key
+        self._nav_buttons[key].config(bg=self.COL_SOFT, fg=self.COL_PRIMARY)
+        self._screens[key].tkraise()
+
+        for k, _icona, _voce, titolo, sub, _builder in self.SCREENS:
+            if k == key:
+                self.header_title.config(text=titolo)
+                self.header_sub.config(text=sub)
+                break
 
     def _update_clock(self):
         """Aggiorna l'orologio nell'header."""
@@ -273,7 +501,9 @@ class AeroGreenHouseGUI:
         vbar.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        inner = ttk.Frame(canvas)
+        # tk.Frame e non ttk.Frame: lo stile ttk di default e' bianco (le card),
+        # mentre qui serve lo sfondo grigio della pagina fra un blocco e l'altro.
+        inner = tk.Frame(canvas, bg=self.COL_BG)
         window = canvas.create_window((0, 0), window=inner, anchor='nw')
 
         # L'area scrollabile segue l'altezza effettiva del contenuto
@@ -332,14 +562,14 @@ class AeroGreenHouseGUI:
         :return: True se l'immagine e' stata mostrata
         """
         if not path or not os.path.exists(path):
-            label.config(image='', text="Nessuna immagine disponibile", foreground='gray')
+            label.config(image='', text="Nessuna immagine disponibile", foreground=self.COL_FAINT)
             label.image = None
             return False
 
         try:
             from PIL import Image, ImageTk
         except ImportError:
-            label.config(image='', foreground='gray',
+            label.config(image='', foreground=self.COL_FAINT,
                          text="Pillow non installato: impossibile mostrare l'immagine\n"
                               "(sul Raspberry Pi: sudo apt install python3-pil.imagetk)")
             label.image = None
@@ -371,7 +601,7 @@ class AeroGreenHouseGUI:
         parent, config_canvas = self._make_scrollable(parent)
 
         # Frame per T_var
-        t_frame = ttk.LabelFrame(parent, text="Variabili Temperatura", padding=10)
+        t_frame = self._card(parent, "Variabili Temperatura")
         t_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Label(t_frame, text="T_opt (°C):").grid(row=0, column=0, sticky=tk.W)
@@ -383,7 +613,7 @@ class AeroGreenHouseGUI:
         ttk.Entry(t_frame, textvariable=self.h_opt_var, width=10).grid(row=0, column=3, sticky=tk.W)
 
         # Frame per DHT22
-        dht_frame = ttk.LabelFrame(parent, text="DHT22 Sensor", padding=10)
+        dht_frame = self._card(parent, "DHT22 Sensor")
         dht_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Label(dht_frame, text="Pin:").grid(row=0, column=0, sticky=tk.W)
@@ -395,7 +625,7 @@ class AeroGreenHouseGUI:
         ttk.Entry(dht_frame, textvariable=self.dht_interval_var, width=10).grid(row=0, column=3, sticky=tk.W)
 
         # Frame per IR Control
-        ir_frame = ttk.LabelFrame(parent, text="IR Control (Condizionatore)", padding=10)
+        ir_frame = self._card(parent, "IR Control (Condizionatore)")
         ir_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Label(ir_frame, text="TX Pin GPIO:").grid(row=0, column=0, sticky=tk.W)
@@ -423,7 +653,7 @@ class AeroGreenHouseGUI:
         ttk.Entry(ir_frame, textvariable=self.ir_H_max_var, width=10).grid(row=2, column=3, sticky=tk.W)
 
         # Frame per Serbatoio (Tank)
-        tank_cfg_frame = ttk.LabelFrame(parent, text="Serbatoio (Tank) — sensore ultrasonico HC-SR04", padding=10)
+        tank_cfg_frame = self._card(parent, "Serbatoio (Tank) — sensore ultrasonico HC-SR04")
         tank_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         tank = self.config.get('tank', {})
@@ -461,7 +691,7 @@ class AeroGreenHouseGUI:
         ttk.Entry(tank_cfg_frame, textvariable=self.tank_nsamples_var, width=10).grid(row=3, column=3, sticky=tk.W)
 
         # Frame per Spettrometro (Spectro)
-        spectro_cfg_frame = ttk.LabelFrame(parent, text="Spettrometro (AS7265x) — indice MCARI2", padding=10)
+        spectro_cfg_frame = self._card(parent, "Spettrometro (AS7265x) — indice MCARI2")
         spectro_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         sp = self.config.get('spectro', {})
@@ -481,8 +711,7 @@ class AeroGreenHouseGUI:
             row=1, column=1, columnspan=3, sticky=tk.EW)
 
         # Frame per Crescita (plant_growth)
-        growth_cfg_frame = ttk.LabelFrame(
-            parent, text="Crescita (altezza pianta) — sensore ultrasonico HC-SR04", padding=10)
+        growth_cfg_frame = self._card(parent, "Crescita (altezza pianta) — sensore ultrasonico HC-SR04")
         growth_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         g = self.config.get('plant_growth', {})
@@ -491,7 +720,7 @@ class AeroGreenHouseGUI:
         self.growth_ref_var = tk.StringVar(value=str(g.get('reference_height_cm', 70.0)))
         ttk.Entry(growth_cfg_frame, textvariable=self.growth_ref_var, width=10).grid(row=0, column=1, sticky=tk.W)
         ttk.Label(growth_cfg_frame, text="(impostata dal bottone 📐 Calibrazione nella tab Crescita)",
-                  foreground='gray').grid(row=0, column=2, columnspan=2, sticky=tk.W, padx=(20, 0))
+                  foreground=self.COL_FAINT).grid(row=0, column=2, columnspan=2, sticky=tk.W, padx=(20, 0))
 
         ttk.Label(growth_cfg_frame, text="TRIG Pin GPIO:").grid(row=1, column=0, sticky=tk.W)
         self.growth_trig_var = tk.StringVar(value=str(g.get('trig_pin', 5)))
@@ -524,7 +753,7 @@ class AeroGreenHouseGUI:
             row=4, column=1, columnspan=3, sticky=tk.EW)
 
         # Frame per Camera
-        camera_cfg_frame = ttk.LabelFrame(parent, text="Camera (Picamera2)", padding=10)
+        camera_cfg_frame = self._card(parent, "Camera (Picamera2)")
         camera_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         cam = self.config.get('camera', {})
@@ -541,8 +770,7 @@ class AeroGreenHouseGUI:
             row=1, column=1, columnspan=3, sticky=tk.EW)
 
         # Frame per Daily Data (elaborazione giornaliera T/H/VPD)
-        daily_cfg_frame = ttk.LabelFrame(
-            parent, text="Daily Data — elaborazione giornaliera T/H/VPD", padding=10)
+        daily_cfg_frame = self._card(parent, "Daily Data — elaborazione giornaliera T/H/VPD")
         daily_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         dd = self.config.get('Daily_Data', {})
@@ -560,7 +788,7 @@ class AeroGreenHouseGUI:
             row=1, column=1, sticky=tk.EW)
 
         # Frame per Log
-        log_frame = ttk.LabelFrame(parent, text="Impostazioni Log", padding=10)
+        log_frame = self._card(parent, "Impostazioni Log")
         log_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Label(log_frame, text="Directory:").grid(row=0, column=0, sticky=tk.W)
@@ -578,7 +806,7 @@ class AeroGreenHouseGUI:
         level_combo.grid(row=2, column=1, sticky=tk.W)
 
         # Frame per Config Reload Interval
-        reload_frame = ttk.LabelFrame(parent, text="Impostazioni Sistema", padding=10)
+        reload_frame = self._card(parent, "Impostazioni Sistema")
         reload_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Label(reload_frame, text="Config Reload Interval (s):").grid(row=0, column=0, sticky=tk.W)
@@ -586,7 +814,7 @@ class AeroGreenHouseGUI:
         ttk.Entry(reload_frame, textvariable=self.reload_interval_var, width=10).grid(row=0, column=1, sticky=tk.W)
 
         # Bottone Salva
-        btn_frame = ttk.Frame(parent)
+        btn_frame = tk.Frame(parent, bg=self.COL_BG)
         btn_frame.pack(fill=tk.X, padx=10, pady=20)
 
         ttk.Button(btn_frame, text="Salva Configurazione", style='Accent.TButton',
@@ -618,7 +846,7 @@ class AeroGreenHouseGUI:
 
         parent, riep_canvas = self._make_scrollable(parent)
 
-        grid = ttk.Frame(parent)
+        grid = tk.Frame(parent, bg=self.COL_BG)
         grid.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         for c in range(3):
             grid.columnconfigure(c, weight=1, uniform='riep')
@@ -638,19 +866,20 @@ class AeroGreenHouseGUI:
             grid, 0, 2, "Indice MCARI2", ("Stato",))
 
         # --- Riga 1: crescita (numero grande) e processi attivi ---
-        growth_card = ttk.LabelFrame(grid, text="Crescita", padding=10)
+        growth_card = self._card(grid, "Crescita")
         growth_card.grid(row=1, column=0, sticky=tk.NSEW, padx=5, pady=5)
         inner = ttk.Frame(growth_card)
         inner.pack(expand=True)
-        ttk.Label(inner, text="Altezza pianta", font=('Arial', 12, 'bold')).pack()
-        self.riep_growth_value = ttk.Label(inner, text="--", font=('Arial', 30, 'bold'),
+        ttk.Label(inner, text="ALTEZZA PIANTA", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.riep_growth_value = ttk.Label(inner, text="--", font=(self.FONT_MONO, 34),
                                            foreground=self.COL_PRIMARY)
         self.riep_growth_value.pack()
-        self.riep_growth_date = ttk.Label(inner, text="Nessuna misura", font=('Arial', 9, 'italic'),
-                                          foreground='gray')
+        self.riep_growth_date = ttk.Label(inner, text="Nessuna misura", font=(self.FONT_UI, 9),
+                                          foreground=self.COL_FAINT)
         self.riep_growth_date.pack(pady=(4, 0))
 
-        proc_card = ttk.LabelFrame(grid, text="Processi Attivi", padding=10)
+        proc_card = self._card(grid, "Processi Attivi")
         proc_card.grid(row=1, column=1, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
         self.riep_proc_frame = ttk.Frame(proc_card)
         self.riep_proc_frame.pack(fill=tk.BOTH, expand=True)
@@ -665,10 +894,10 @@ class AeroGreenHouseGUI:
         :param campi: etichette dei valori testuali sotto l'arco
         :return: (canvas dell'arco, dict {campo: label del valore}, label della data)
         """
-        card = ttk.LabelFrame(grid, text=titolo, padding=10)
+        card = self._card(grid, titolo)
         card.grid(row=row, column=col, sticky=tk.NSEW, padx=5, pady=5)
 
-        canvas = tk.Canvas(card, height=110, highlightthickness=0, bg=self.COL_BG)
+        canvas = tk.Canvas(card, height=110, highlightthickness=0, bg=self.COL_CARD)
         canvas.pack(fill=tk.X)
         canvas.bind('<Configure>', lambda e: self.refresh_riepilogo_tab(force=True))
 
@@ -676,13 +905,13 @@ class AeroGreenHouseGUI:
         for campo in campi:
             riga = ttk.Frame(card)
             riga.pack(fill=tk.X, pady=1)
-            ttk.Label(riga, text=f"{campo}:", font=('Arial', 10)).pack(side=tk.LEFT)
-            valore = ttk.Label(riga, text="--", font=('Arial', 12, 'bold'))
+            ttk.Label(riga, text=f"{campo}:", font=(self.FONT_UI, 10)).pack(side=tk.LEFT)
+            valore = ttk.Label(riga, text="--", font=(self.FONT_UI, 12, 'bold'))
             valore.pack(side=tk.RIGHT)
             labels[campo] = valore
 
-        data = ttk.Label(card, text="Nessuna misura", font=('Arial', 9, 'italic'),
-                         foreground='gray')
+        data = ttk.Label(card, text="Nessuna misura", font=(self.FONT_UI, 9),
+                         foreground=self.COL_FAINT)
         data.pack(pady=(6, 0))
         return canvas, labels, data
 
@@ -703,7 +932,7 @@ class AeroGreenHouseGUI:
         if w <= 1 or h <= 1:  # Canvas non ancora disegnato
             return
 
-        spessore = 16
+        spessore = 12
         margine = 18
         lato = min(w - 2 * margine, (h - 14) * 2)
         if lato <= spessore * 2:
@@ -715,7 +944,7 @@ class AeroGreenHouseGUI:
 
         # Arco di sfondo (scala completa)
         canvas.create_arc(*box, start=180, extent=-180, style=tk.ARC,
-                          outline='#d0d8d0', width=spessore)
+                          outline=self.COL_DIV, width=spessore)
 
         # Arco del valore
         if value is not None and vmax > vmin:
@@ -727,16 +956,16 @@ class AeroGreenHouseGUI:
         # Valore al centro
         cx = x0 + lato / 2
         cy = y0 + lato / 2
-        canvas.create_text(cx, cy - 8, text=testo, font=('Arial', 20, 'bold'),
-                           fill=color if value is not None else 'gray')
+        canvas.create_text(cx, cy - 8, text=testo, font=(self.FONT_MONO, 22),
+                           fill=color if value is not None else self.COL_FAINT)
         if unita:
-            canvas.create_text(cx, cy + 12, text=unita, font=('Arial', 9), fill='gray')
+            canvas.create_text(cx, cy + 12, text=unita, font=(self.FONT_UI, 9), fill=self.COL_FAINT)
 
         # Etichette di fondo scala
         canvas.create_text(x0 + spessore / 2, cy + 12, text=self._fmt_scala(vmin),
-                           font=('Arial', 8), fill='#666666')
+                           font=(self.FONT_UI, 8), fill=self.COL_FAINT)
         canvas.create_text(x0 + lato - spessore / 2, cy + 12, text=self._fmt_scala(vmax),
-                           font=('Arial', 8), fill='#666666')
+                           font=(self.FONT_UI, 8), fill=self.COL_FAINT)
 
     def _fmt_scala(self, v):
         """Formatta un fondo scala senza decimali inutili (100 invece di 100.0)."""
@@ -788,10 +1017,10 @@ class AeroGreenHouseGUI:
             return
 
         self._draw_arc_gauge(self.riep_amb_gauge, r['humidity'], 0, 100,
-                             '#ff7f0e', f"{r['humidity']:.1f}", "Umidità (%)")
+                             self.COL_WARN, f"{r['humidity']:.1f}", "Umidità (%)")
         self.riep_amb_labels['Temperatura'].config(text=f"{r['temperature']:.1f} °C",
-                                                   foreground='#207abb')
-        self.riep_amb_labels['VPD'].config(text=f"{r['vpd']:.4f} kPa", foreground='#2ca02c')
+                                                   foreground=self.COL_BLUE)
+        self.riep_amb_labels['VPD'].config(text=f"{r['vpd']:.4f} kPa", foreground=self.COL_PRIMARY)
         self.riep_amb_date.config(text=f"Acquisito: {self._format_acq_date(r['timestamp'])}")
 
     def _refresh_riep_serbatoio(self, force):
@@ -806,7 +1035,7 @@ class AeroGreenHouseGUI:
 
         # Il colore segue il livello: sotto un quarto la tanica va riempita
         fill = r['fill_percent']
-        colore = self.COL_BAD if fill < 25 else (self.COL_WARN if fill < 50 else '#207abb')
+        colore = self.COL_BAD if fill < 25 else (self.COL_WARN if fill < 50 else self.COL_BLUE)
         self._draw_arc_gauge(self.riep_tank_gauge, fill, 0, 100, colore,
                              f"{fill:.1f}", "Riempimento (%)")
         self.riep_tank_labels['Volume'].config(text=f"{r['volume_L']:.2f} L", foreground=colore)
@@ -823,7 +1052,7 @@ class AeroGreenHouseGUI:
             self._draw_arc_gauge(self.riep_mcari_gauge, None, 0, 1, 'gray', "--", "MCARI2")
             return
 
-        colore = self.MCARI2_COLORS.get(r['stato'], 'gray')
+        colore = self.MCARI2_COLORS.get(r['stato'], self.COL_FAINT)
         self._draw_arc_gauge(self.riep_mcari_gauge, r['mcari2'], 0, 1, colore,
                              f"{r['mcari2']:.3f}", "MCARI2")
         self.riep_mcari_labels['Stato'].config(text=r['stato'], foreground=colore)
@@ -837,7 +1066,7 @@ class AeroGreenHouseGUI:
             return
 
         if r is None:
-            self.riep_growth_value.config(text="--", foreground='gray')
+            self.riep_growth_value.config(text="--", foreground=self.COL_FAINT)
             self.riep_growth_date.config(text="Nessuna misura")
             return
 
@@ -856,16 +1085,16 @@ class AeroGreenHouseGUI:
 
         if not attivi:
             ttk.Label(self.riep_proc_frame, text="Nessun processo attivo",
-                      font=('Arial', 11, 'italic'), foreground='gray').pack(anchor=tk.W, pady=4)
+                      font=(self.FONT_UI, 10), foreground=self.COL_FAINT).pack(anchor=tk.W, pady=4)
             return
 
         for nome in attivi:
             riga = ttk.Frame(self.riep_proc_frame)
             riga.pack(fill=tk.X, pady=2)
-            spia = tk.Canvas(riga, width=16, height=16, highlightthickness=0, bg=self.COL_BG)
+            spia = tk.Canvas(riga, width=16, height=16, highlightthickness=0, bg=self.COL_CARD)
             spia.pack(side=tk.LEFT, padx=(2, 10))
-            spia.create_oval(3, 3, 13, 13, fill=self.COL_OK, outline="#555555")
-            ttk.Label(riga, text=nome, font=('Arial', 11)).pack(side=tk.LEFT)
+            spia.create_oval(3, 3, 13, 13, fill=self.COL_OK, outline='')
+            ttk.Label(riga, text=nome, font=(self.FONT_UI, 11)).pack(side=tk.LEFT)
 
     # ------------------------------------------------------------------
     # Tab: Processi Attivi
@@ -874,16 +1103,15 @@ class AeroGreenHouseGUI:
         """Tab che mostra lo stato (verde=attivo / rosso=fermo) dei processi."""
         parent, status_canvas = self._make_scrollable(parent)
 
-        container = ttk.LabelFrame(parent, text="Stato dei Processi", padding=15)
+        container = self._card(parent, "Stato dei Processi")
         container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Legenda
         legend = ttk.Frame(container)
         legend.pack(fill=tk.X, pady=(0, 12))
-        ttk.Label(legend, text="●  Attivo", foreground=self.COL_OK,
-                  font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(2, 20))
-        ttk.Label(legend, text="●  Fermo", foreground=self.COL_BAD,
-                  font=('Arial', 11, 'bold')).pack(side=tk.LEFT)
+        self._chip(legend, "● ATTIVO", self.COL_PRIMARY, self.COL_SOFT).pack(
+            side=tk.LEFT, padx=(0, 8))
+        self._chip(legend, "● FERMO", self.COL_BAD, "#fdecec").pack(side=tk.LEFT)
 
         # Contenitore delle righe (ricostruito quando cambia l'elenco processi)
         self.status_rows_frame = ttk.Frame(container)
@@ -929,19 +1157,23 @@ class AeroGreenHouseGUI:
             child.destroy()
         self.status_indicators = {}
 
-        for k in keys:
+        for i, k in enumerate(keys):
+            # Separatore sottile fra le righe (la prima non ce l'ha)
+            if i:
+                tk.Frame(self.status_rows_frame, bg=self.COL_DIV, height=1).pack(fill=tk.X)
+
             row = ttk.Frame(self.status_rows_frame)
-            row.pack(fill=tk.X, pady=5)
+            row.pack(fill=tk.X, pady=8)
 
-            canvas = tk.Canvas(row, width=22, height=22, highlightthickness=0, bg=self.COL_BG)
-            canvas.pack(side=tk.LEFT, padx=(6, 14))
-            oval = canvas.create_oval(4, 4, 18, 18, fill=self.COL_BAD, outline="#555555")
+            canvas = tk.Canvas(row, width=14, height=14, highlightthickness=0, bg=self.COL_CARD)
+            canvas.pack(side=tk.LEFT, padx=(2, 14))
+            oval = canvas.create_oval(3, 3, 13, 13, fill=self.COL_BAD, outline='')
 
-            ttk.Label(row, text=k, font=('Arial', 12)).pack(side=tk.LEFT)
+            ttk.Label(row, text=k, font=(self.FONT_UI, 11)).pack(side=tk.LEFT)
 
-            state_lbl = ttk.Label(row, text="Fermo", font=('Arial', 11, 'italic'),
+            state_lbl = ttk.Label(row, text="FERMO", font=(self.FONT_UI, 9, 'bold'),
                                   foreground=self.COL_BAD)
-            state_lbl.pack(side=tk.RIGHT, padx=10)
+            state_lbl.pack(side=tk.RIGHT, padx=6)
 
             self.status_indicators[k] = (canvas, oval, state_lbl)
 
@@ -960,7 +1192,7 @@ class AeroGreenHouseGUI:
             canvas, oval, state_lbl = self.status_indicators[label]
             color = self.COL_OK if active else self.COL_BAD
             canvas.itemconfig(oval, fill=color)
-            state_lbl.config(text="Attivo" if active else "Fermo", foreground=color)
+            state_lbl.config(text="ATTIVO" if active else "FERMO", foreground=color)
 
         self.root.after(1000, self.refresh_status_tab)
 
@@ -972,7 +1204,7 @@ class AeroGreenHouseGUI:
         parent, jobs_canvas = self._make_scrollable(parent)
 
         # Frame lista job
-        list_frame = ttk.LabelFrame(parent, text="Job Attuali", padding=10)
+        list_frame = self._card(parent, "Job Attuali")
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Treeview per visualizzare i job
@@ -999,7 +1231,7 @@ class AeroGreenHouseGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Frame per bottoni gestione
-        btn_frame = ttk.LabelFrame(parent, text="Gestione Job", padding=10)
+        btn_frame = self._card(parent, "Gestione Job")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="➕ Nuovo Job", command=self.add_job_window).pack(side=tk.LEFT, padx=5)
@@ -1008,7 +1240,7 @@ class AeroGreenHouseGUI:
         ttk.Button(btn_frame, text="🔄 Ricarica Lista", command=self.refresh_jobs_list).pack(side=tk.LEFT, padx=5)
 
         # Frame per attivazione/disattivazione
-        toggle_frame = ttk.LabelFrame(parent, text="Controllo Job", padding=10)
+        toggle_frame = self._card(parent, "Controllo Job")
         toggle_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(toggle_frame, text="✅ Attiva Job", style='Accent.TButton',
@@ -1023,7 +1255,7 @@ class AeroGreenHouseGUI:
         parent, output_canvas = self._make_scrollable(parent)
 
         # Frame superiore con bottoni
-        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame = self._card(parent, "Controlli")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="🔄 Aggiorna", command=self.refresh_output).pack(side=tk.LEFT, padx=5)
@@ -1031,14 +1263,16 @@ class AeroGreenHouseGUI:
         ttk.Button(btn_frame, text="📂 Apri File Log", command=self.open_log_file).pack(side=tk.LEFT, padx=5)
 
         # Info sul file log
-        info_frame = ttk.Frame(parent)
+        info_frame = tk.Frame(parent, bg=self.COL_BG)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(info_frame, text="File Log:", font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
-        self.log_file_label = ttk.Label(info_frame, text="", foreground="blue")
+        tk.Label(info_frame, text="File log:", bg=self.COL_BG, fg=self.COL_FAINT,
+                 font=(self.FONT_UI, 9, 'bold')).pack(side=tk.LEFT)
+        self.log_file_label = tk.Label(info_frame, text="", bg=self.COL_BG,
+                                       fg=self.COL_PRIMARY, font=(self.FONT_MONO, 9))
         self.log_file_label.pack(side=tk.LEFT, padx=5)
 
         # Frame per il testo (output)
-        text_frame = ttk.LabelFrame(parent, text="Output Terminale", padding=5)
+        text_frame = self._card(parent, "Output Terminale")
         text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Text widget con scrollbar
@@ -1046,16 +1280,17 @@ class AeroGreenHouseGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.output_text = tk.Text(text_frame, yscrollcommand=scrollbar.set,
-                                   wrap=tk.WORD, font=('Courier', 9), height=20,
-                                   bg="#1e1e1e", fg="#dcdcdc", insertbackground="white")
+                                   wrap=tk.WORD, font=(self.FONT_MONO, 9), height=20,
+                                   bg="#16211c", fg="#dfe6e2", insertbackground="white",
+                                   relief=tk.FLAT, borderwidth=0, padx=10, pady=8)
         self.output_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.output_text.yview)
 
         # Configura i tag per i colori
-        self.output_text.tag_config('info', foreground='#73d216')
-        self.output_text.tag_config('warning', foreground='#fcaf3e')
-        self.output_text.tag_config('error', foreground='#ef5350')
-        self.output_text.tag_config('debug', foreground='#9e9e9e')
+        self.output_text.tag_config('info', foreground='#7fd6a2')
+        self.output_text.tag_config('warning', foreground='#f0a75a')
+        self.output_text.tag_config('error', foreground='#ff8a80')
+        self.output_text.tag_config('debug', foreground='#8a968f')
 
         # Aggiorna il label con il file log
         self.update_log_file_label()
@@ -1450,7 +1685,7 @@ class AeroGreenHouseGUI:
         parent, ambient_canvas = self._make_scrollable(parent)
 
         # Frame superiore con bottoni
-        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame = self._card(parent, "Controlli")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="▶️ Attiva Lettura", style='Accent.TButton',
@@ -1460,7 +1695,7 @@ class AeroGreenHouseGUI:
         ttk.Button(btn_frame, text="📊 Leggi Adesso", command=self.read_ambient_now).pack(side=tk.LEFT, padx=5)
 
         # Frame principale per i dati
-        main_frame = ttk.LabelFrame(parent, text="AMBIENT", padding=20)
+        main_frame = self._card(parent, "AMBIENT")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Crea un frame interno per centrare il contenuto
@@ -1470,27 +1705,30 @@ class AeroGreenHouseGUI:
         # Temperatura
         temp_frame = ttk.Frame(inner_frame)
         temp_frame.pack(pady=10)
-        ttk.Label(temp_frame, text="Temperatura", font=('Arial', 16, 'bold')).pack()
-        self.ambient_temp_label = ttk.Label(temp_frame, text="-- °C", font=('Arial', 24, 'bold'), foreground="#207abb")
+        ttk.Label(temp_frame, text="TEMPERATURA", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.ambient_temp_label = ttk.Label(temp_frame, text="-- °C", font=(self.FONT_MONO, 30), foreground=self.COL_BLUE)
         self.ambient_temp_label.pack()
 
         # Umidità
         humid_frame = ttk.Frame(inner_frame)
         humid_frame.pack(pady=10)
-        ttk.Label(humid_frame, text="Umidità", font=('Arial', 16, 'bold')).pack()
-        self.ambient_humid_label = ttk.Label(humid_frame, text="-- %", font=('Arial', 24, 'bold'), foreground='#ff7f0e')
+        ttk.Label(humid_frame, text="UMIDITÀ", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.ambient_humid_label = ttk.Label(humid_frame, text="-- %", font=(self.FONT_MONO, 30), foreground=self.COL_WARN)
         self.ambient_humid_label.pack()
 
         # VPD
         vpd_frame = ttk.Frame(inner_frame)
         vpd_frame.pack(pady=10)
-        ttk.Label(vpd_frame, text="VPD", font=('Arial', 16, 'bold')).pack()
-        self.ambient_vpd_label = ttk.Label(vpd_frame, text="-- kPa", font=('Arial', 24, 'bold'), foreground='#2ca02c')
+        ttk.Label(vpd_frame, text="VPD", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.ambient_vpd_label = ttk.Label(vpd_frame, text="-- kPa", font=(self.FONT_MONO, 30), foreground=self.COL_PRIMARY)
         self.ambient_vpd_label.pack()
 
         # Timestamp della lettura
         self.ambient_timestamp_label = ttk.Label(inner_frame, text="Ultimo aggiornamento: --",
-                                                 font=('Arial', 12, 'italic'), foreground='gray')
+                                                 font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
         self.ambient_timestamp_label.pack(pady=20)
 
         # --- Sezione elaborazione giornaliera (DailyTHManager) ---
@@ -1510,8 +1748,7 @@ class AeroGreenHouseGUI:
         elaborando il file del giorno precedente: la sezione e' popolata appena
         si preme 'Attiva Daily', senza aspettare la mezzanotte.
         """
-        daily_frame = ttk.LabelFrame(parent, text="Elaborazione giornaliera (T/H/VPD)",
-                                     padding=15)
+        daily_frame = self._card(parent, "Elaborazione giornaliera (T/H/VPD)")
         daily_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Controlli
@@ -1523,7 +1760,7 @@ class AeroGreenHouseGUI:
                    command=self.stop_daily_processing).pack(side=tk.LEFT, padx=5)
 
         self.daily_date_label = ttk.Label(daily_frame, text="Nessuna elaborazione eseguita",
-                                          font=('Arial', 11, 'italic'), foreground='gray')
+                                          font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
         self.daily_date_label.pack(anchor=tk.W, pady=(0, 8))
 
         # Tabella statistiche: righe T/H/VPD, colonne max/min/media
@@ -1533,30 +1770,30 @@ class AeroGreenHouseGUI:
             stats_frame.columnconfigure(c, weight=1, uniform='daily')
 
         for col, testo in enumerate(("", "Massimo", "Minimo", "Media"), start=0):
-            ttk.Label(stats_frame, text=testo, font=('Arial', 11, 'bold'),
+            ttk.Label(stats_frame, text=testo, font=(self.FONT_UI, 11, 'bold'),
                       foreground=self.COL_PRIMARY).grid(row=0, column=col, pady=4)
 
         # Chiavi come le restituisce compute_statistics (daily_th_processor.py)
         righe = (
-            ("Temperatura (°C)", 'max_T', 'min_T', 'avg_temperature', '#207abb'),
-            ("Umidità (%)", 'max_H', 'min_H', 'avg_humidity', '#ff7f0e'),
-            ("VPD (kPa)", 'max_VPD', 'min_VPD', 'avg_vpd', '#2ca02c'),
+            ("Temperatura (°C)", 'max_T', 'min_T', 'avg_temperature', self.COL_BLUE),
+            ("Umidità (%)", 'max_H', 'min_H', 'avg_humidity', self.COL_WARN),
+            ("VPD (kPa)", 'max_VPD', 'min_VPD', 'avg_vpd', self.COL_PRIMARY),
         )
         self.daily_stat_labels = {}
         for r, (titolo, k_max, k_min, k_avg, colore) in enumerate(righe, start=1):
-            ttk.Label(stats_frame, text=titolo, font=('Arial', 11, 'bold')).grid(
+            ttk.Label(stats_frame, text=titolo, font=(self.FONT_UI, 11, 'bold')).grid(
                 row=r, column=0, sticky=tk.W, pady=4)
             for col, chiave in enumerate((k_max, k_min, k_avg), start=1):
-                lbl = ttk.Label(stats_frame, text="--", font=('Arial', 14, 'bold'),
+                lbl = ttk.Label(stats_frame, text="--", font=(self.FONT_MONO, 15),
                                 foreground=colore)
                 lbl.grid(row=r, column=col, pady=4)
                 self.daily_stat_labels[chiave] = lbl
 
         # Plot giornaliero
         ttk.Label(daily_frame, text="Andamento giornaliero",
-                  font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(8, 4))
+                  font=(self.FONT_UI, 11, 'bold')).pack(anchor=tk.W, pady=(8, 4))
         self.daily_plot_label = ttk.Label(daily_frame, text="Nessun plot disponibile",
-                                          foreground='gray')
+                                          foreground=self.COL_FAINT)
         self.daily_plot_label.pack(anchor=tk.W)
 
         # Cache dell'ultimo giorno disegnato: senza, ricaricheremmo il PNG da
@@ -1667,50 +1904,48 @@ class AeroGreenHouseGUI:
         parent, ir_canvas = self._make_scrollable(parent)
 
         # Unica sezione: Sistema di Controllo AC
-        ac_frame = ttk.LabelFrame(parent, text="Sistema di Controllo AC", padding=20)
+        ac_frame = self._card(parent, "Sistema di Controllo AC")
         ac_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         inner = ttk.Frame(ac_frame)
         inner.pack(expand=True)
 
         # Indicatore di stato
-        ttk.Label(inner, text="Stato Controllo AC", font=('Arial', 14, 'bold')).pack(pady=(10, 5))
-        self.ac_status_label = ttk.Label(
-            inner, text="⏹ INATTIVO", font=('Arial', 20, 'bold'), foreground='gray'
-        )
+        ttk.Label(inner, text="Stato Controllo AC", font=(self.FONT_UI, 14, 'bold')).pack(pady=(10, 5))
+        self.ac_status_label = self._chip(inner, "⏹ INATTIVO", self.COL_FAINT, self.COL_DIV)
         self.ac_status_label.pack(pady=10)
 
         # Info parametri correnti
         params_frame = ttk.Frame(inner)
         params_frame.pack(pady=10)
 
-        ttk.Label(params_frame, text="T_opt:", font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(params_frame, text="T_opt:", font=(self.FONT_UI, 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
         self.ac_topt_label = ttk.Label(
             params_frame,
             text=f"{self.config.get('ir_control', {}).get('T_max', '--')} °C",
-            font=('Arial', 12, 'bold'), foreground='#207abb'
+            font=(self.FONT_UI, 12, 'bold'), foreground=self.COL_BLUE
         )
         self.ac_topt_label.grid(row=0, column=1, sticky=tk.W, padx=5)
 
-        ttk.Label(params_frame, text="H_opt:", font=('Arial', 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
+        ttk.Label(params_frame, text="H_opt:", font=(self.FONT_UI, 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
         self.ac_hopt_label = ttk.Label(
             params_frame,
             text=f"{self.config.get('ir_control', {}).get('H_max', '--')} %",
-            font=('Arial', 12, 'bold'), foreground='#ff7f0e'
+            font=(self.FONT_UI, 12, 'bold'), foreground=self.COL_WARN
         )
         self.ac_hopt_label.grid(row=0, column=3, sticky=tk.W, padx=5)
 
-        ttk.Label(params_frame, text="Tempo max ON:", font=('Arial', 12)).grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(params_frame, text="Tempo max ON:", font=(self.FONT_UI, 12)).grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.ac_tmax_label = ttk.Label(
             params_frame,
             text=f"{self.config.get('ir_control', {}).get('time_max_on', '--')} min",
-            font=('Arial', 12, 'bold')
+            font=(self.FONT_UI, 12, 'bold')
         )
         self.ac_tmax_label.grid(row=1, column=1, sticky=tk.W, padx=5)
 
-        ttk.Label(params_frame, text="Ultimo comando:", font=('Arial', 12)).grid(row=1, column=2, sticky=tk.W, padx=15)
+        ttk.Label(params_frame, text="Ultimo comando:", font=(self.FONT_UI, 12)).grid(row=1, column=2, sticky=tk.W, padx=15)
         self.ac_last_cmd_label = ttk.Label(
-            params_frame, text="--", font=('Arial', 12, 'bold'), foreground='#2ca02c'
+            params_frame, text="--", font=(self.FONT_UI, 12, 'bold'), foreground=self.COL_PRIMARY
         )
         self.ac_last_cmd_label.grid(row=1, column=3, sticky=tk.W, padx=5)
 
@@ -1747,7 +1982,7 @@ class AeroGreenHouseGUI:
             return
 
         # Aggiorna UI
-        self.ac_status_label.config(text="▶ ATTIVO", foreground='green')
+        self.ac_status_label.config(text="▶ ATTIVO", fg=self.COL_PRIMARY, bg=self.COL_SOFT)
 
     def stop_ac_control(self):
         """Arresta immediatamente il controllo automatico del condizionatore."""
@@ -1757,7 +1992,7 @@ class AeroGreenHouseGUI:
             return
 
         # Aggiorna UI
-        self.ac_status_label.config(text="⏹ INATTIVO", foreground='gray')
+        self.ac_status_label.config(text="⏹ INATTIVO", fg=self.COL_FAINT, bg=self.COL_DIV)
         self.ac_last_cmd_label.config(text="off")
 
     # ------------------------------------------------------------------
@@ -1768,7 +2003,7 @@ class AeroGreenHouseGUI:
         parent, tank_canvas = self._make_scrollable(parent)
 
         # Frame superiore con bottoni
-        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame = self._card(parent, "Controlli")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="▶️ Attiva Lettura", style='Accent.TButton',
@@ -1778,7 +2013,7 @@ class AeroGreenHouseGUI:
         ttk.Button(btn_frame, text="📊 Leggi Adesso", command=self.read_tank_now).pack(side=tk.LEFT, padx=5)
 
         # Frame principale per i dati
-        main_frame = ttk.LabelFrame(parent, text="LIVELLI SERBATOIO", padding=20)
+        main_frame = self._card(parent, "LIVELLI SERBATOIO")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         inner = ttk.Frame(main_frame)
@@ -1787,8 +2022,9 @@ class AeroGreenHouseGUI:
         # Volume (valore principale)
         vol_frame = ttk.Frame(inner)
         vol_frame.pack(pady=10)
-        ttk.Label(vol_frame, text="Volume", font=('Arial', 16, 'bold')).pack()
-        self.tank_volume_label = ttk.Label(vol_frame, text="-- L", font=('Arial', 28, 'bold'), foreground='#207abb')
+        ttk.Label(vol_frame, text="VOLUME", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.tank_volume_label = ttk.Label(vol_frame, text="-- L", font=(self.FONT_MONO, 34), foreground=self.COL_BLUE)
         self.tank_volume_label.pack()
 
         # Barra di riempimento
@@ -1798,26 +2034,27 @@ class AeroGreenHouseGUI:
         self.tank_progress = ttk.Progressbar(pb_frame, orient=tk.HORIZONTAL, length=420,
                                              mode='determinate', variable=self.tank_fill_var, maximum=100)
         self.tank_progress.pack()
-        self.tank_fill_label = ttk.Label(inner, text="Riempimento: -- %", font=('Arial', 14, 'bold'), foreground='#2ca02c')
-        self.tank_fill_label.pack(pady=5)
+        self.tank_fill_label = self._chip(inner, "Riempimento: -- %",
+                                          self.COL_BLUE, self.COL_BLUE_BG)
+        self.tank_fill_label.pack(pady=8)
 
         # Valori secondari
         sec = ttk.Frame(inner)
         sec.pack(pady=10)
-        ttk.Label(sec, text="Livello:", font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.tank_level_label = ttk.Label(sec, text="-- cm", font=('Arial', 12, 'bold'))
+        ttk.Label(sec, text="Livello:", font=(self.FONT_UI, 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.tank_level_label = ttk.Label(sec, text="-- cm", font=(self.FONT_UI, 12, 'bold'))
         self.tank_level_label.grid(row=0, column=1, sticky=tk.W, padx=5)
-        ttk.Label(sec, text="Distanza:", font=('Arial', 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
-        self.tank_dist_label = ttk.Label(sec, text="-- cm", font=('Arial', 12, 'bold'))
+        ttk.Label(sec, text="Distanza:", font=(self.FONT_UI, 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
+        self.tank_dist_label = ttk.Label(sec, text="-- cm", font=(self.FONT_UI, 12, 'bold'))
         self.tank_dist_label.grid(row=0, column=3, sticky=tk.W, padx=5)
 
         # Timestamp della lettura
         self.tank_timestamp_label = ttk.Label(inner, text="Ultimo aggiornamento: --",
-                                             font=('Arial', 12, 'italic'), foreground='gray')
+                                             font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
         self.tank_timestamp_label.pack(pady=15)
 
-        ttk.Label(inner, text="⚠️ Sensore ancora da tarare (parametri nella tab Configurazione)",
-                  foreground='#b26a00', font=('Arial', 10, 'italic')).pack()
+        self._chip(inner, "⚠  Sensore ancora da tarare — parametri nella schermata Configurazione",
+                   self.COL_WARN, self.COL_WARN_BG).pack()
 
         self._bind_mousewheel(parent, tank_canvas)
 
@@ -1875,7 +2112,7 @@ class AeroGreenHouseGUI:
         parent, spectro_canvas = self._make_scrollable(parent)
 
         # Frame superiore con bottoni
-        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame = self._card(parent, "Controlli")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="🔬 Misura Adesso", command=self.read_spectro_now).pack(side=tk.LEFT, padx=5)
@@ -1887,7 +2124,7 @@ class AeroGreenHouseGUI:
                    command=self.calibrate_spectro).pack(side=tk.LEFT, padx=5)
 
         # Frame principale per i dati
-        main_frame = ttk.LabelFrame(parent, text="INDICE MCARI2", padding=15)
+        main_frame = self._card(parent, "INDICE MCARI2")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         inner = ttk.Frame(main_frame)
@@ -1896,30 +2133,31 @@ class AeroGreenHouseGUI:
         # Valore dell'indice (valore principale)
         val_frame = ttk.Frame(inner)
         val_frame.pack(pady=5)
-        ttk.Label(val_frame, text="MCARI2", font=('Arial', 16, 'bold')).pack()
-        self.spectro_value_label = ttk.Label(val_frame, text="--", font=('Arial', 28, 'bold'),
-                                             foreground='#207abb')
+        ttk.Label(val_frame, text="MCARI2", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.spectro_value_label = ttk.Label(val_frame, text="--", font=(self.FONT_MONO, 34),
+                                             foreground=self.COL_BLUE)
         self.spectro_value_label.pack()
 
         # Indicatore dello stato della pianta (spia + testo)
         state_frame = ttk.Frame(inner)
         state_frame.pack(pady=10)
         self.spectro_canvas = tk.Canvas(state_frame, width=28, height=28,
-                                        highlightthickness=0, bg=self.COL_BG)
+                                        highlightthickness=0, bg=self.COL_CARD)
         self.spectro_canvas.pack(side=tk.LEFT, padx=(0, 10))
-        self.spectro_oval = self.spectro_canvas.create_oval(4, 4, 24, 24,
-                                                            fill='gray', outline="#555555")
-        self.spectro_state_label = ttk.Label(state_frame, text="Nessuna misura disponibile",
-                                             font=('Arial', 14, 'bold'), foreground='gray')
+        self.spectro_oval = self.spectro_canvas.create_oval(6, 6, 22, 22,
+                                                            fill=self.COL_FAINT, outline='')
+        self.spectro_state_label = self._chip(state_frame, "Nessuna misura disponibile",
+                                              self.COL_FAINT, self.COL_DIV)
         self.spectro_state_label.pack(side=tk.LEFT)
 
         # Timestamp della lettura
         self.spectro_timestamp_label = ttk.Label(inner, text="Ultimo aggiornamento: --",
-                                                 font=('Arial', 12, 'italic'), foreground='gray')
+                                                 font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
         self.spectro_timestamp_label.pack(pady=5)
 
         # Storico delle misure
-        hist_frame = ttk.LabelFrame(inner, text="Storico Misure", padding=5)
+        hist_frame = self._card(inner, "Storico Misure")
         hist_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
         columns = ('Data/Ora', 'MCARI2', 'Stato')
@@ -1955,10 +2193,12 @@ class AeroGreenHouseGUI:
 
     def _update_spectro_labels(self, result):
         """Aggiorna valore, spia e storico (chiamata via root.after dal thread di lettura)."""
-        color = self.MCARI2_COLORS.get(result['stato'], 'gray')
+        color = self.MCARI2_COLORS.get(result['stato'], self.COL_FAINT)
         self.spectro_value_label.config(text=f"{result['mcari2']:.4f}", foreground=color)
         self.spectro_canvas.itemconfig(self.spectro_oval, fill=color)
-        self.spectro_state_label.config(text=result['testo'], foreground=color)
+        self.spectro_state_label.config(
+            text=result['testo'], fg=color,
+            bg=self.MCARI2_CHIP_BG.get(result['stato'], self.COL_DIV))
         self.spectro_timestamp_label.config(text=f"Ultimo aggiornamento: {result['timestamp']}")
         self._refresh_spectro_history()
 
@@ -2043,7 +2283,7 @@ class AeroGreenHouseGUI:
         parent, growth_canvas = self._make_scrollable(parent)
 
         # Frame superiore con bottoni
-        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame = self._card(parent, "Controlli")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="📏 Misura Adesso", command=self.read_growth_now).pack(side=tk.LEFT, padx=5)
@@ -2055,7 +2295,7 @@ class AeroGreenHouseGUI:
                    command=self.calibrate_growth).pack(side=tk.LEFT, padx=5)
 
         # Frame principale per i dati
-        main_frame = ttk.LabelFrame(parent, text="ALTEZZA PIANTA", padding=15)
+        main_frame = self._card(parent, "ALTEZZA PIANTA")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         inner = ttk.Frame(main_frame)
@@ -2064,19 +2304,20 @@ class AeroGreenHouseGUI:
         # Altezza dell'ultima misura (valore principale)
         val_frame = ttk.Frame(inner)
         val_frame.pack(pady=5)
-        ttk.Label(val_frame, text="Altezza pianta", font=('Arial', 16, 'bold')).pack()
-        self.growth_value_label = ttk.Label(val_frame, text="--", font=('Arial', 28, 'bold'),
+        ttk.Label(val_frame, text="ALTEZZA PIANTA", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.growth_value_label = ttk.Label(val_frame, text="--", font=(self.FONT_MONO, 34),
                                             foreground=self.COL_PRIMARY)
         self.growth_value_label.pack()
 
         # Timestamp della lettura
         self.growth_timestamp_label = ttk.Label(inner, text="Ultima misurazione: --",
-                                                font=('Arial', 12, 'italic'), foreground='gray')
+                                                font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
         self.growth_timestamp_label.pack(pady=5)
 
         # Andamento nel tempo: Canvas nativo (nessuna dipendenza da matplotlib,
         # i punti sono pochi perche' la misura e' ogni N giorni)
-        chart_frame = ttk.LabelFrame(inner, text="Andamento nel tempo", padding=5)
+        chart_frame = self._card(inner, "Andamento nel tempo")
         chart_frame.pack(fill=tk.X, pady=10)
         self.growth_canvas = tk.Canvas(chart_frame, height=180, highlightthickness=0,
                                        bg='white')
@@ -2084,7 +2325,7 @@ class AeroGreenHouseGUI:
         self.growth_canvas.bind('<Configure>', lambda e: self._draw_growth_chart())
 
         # Storico delle misure
-        hist_frame = ttk.LabelFrame(inner, text="Storico Misure", padding=5)
+        hist_frame = self._card(inner, "Storico Misure")
         hist_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
         columns = ('Data/Ora', 'Altezza (cm)')
@@ -2143,7 +2384,7 @@ class AeroGreenHouseGUI:
         history = self.ah.plant_growth.history
         if len(history) < 2:
             canvas.create_text(w // 2, h // 2, text="Servono almeno due misure per l'andamento",
-                               fill='gray', font=('Arial', 11, 'italic'))
+                               fill=self.COL_FAINT, font=(self.FONT_UI, 11, 'italic'))
             return
 
         # Area di disegno (margini per le etichette)
@@ -2159,17 +2400,17 @@ class AeroGreenHouseGUI:
             h_min, h_max = h_min - 1.0, h_max + 1.0
 
         # Assi
-        canvas.create_line(x0, y0, x0, y1, fill='#999999')
-        canvas.create_line(x0, y1, x1, y1, fill='#999999')
+        canvas.create_line(x0, y0, x0, y1, fill=self.COL_BORDER)
+        canvas.create_line(x0, y1, x1, y1, fill=self.COL_BORDER)
 
         # Etichette in cm (min, medio, max)
         for frac in (0.0, 0.5, 1.0):
             value = h_min + (h_max - h_min) * frac
             y = y1 - (y1 - y0) * frac
             canvas.create_text(x0 - 5, y, text=f"{value:.1f}", anchor=tk.E,
-                               fill='#666666', font=('Arial', 8))
+                               fill=self.COL_FAINT, font=(self.FONT_UI, 8))
             if frac > 0:  # Griglia orizzontale leggera
-                canvas.create_line(x0, y, x1, y, fill='#e4e4e4')
+                canvas.create_line(x0, y, x1, y, fill=self.COL_DIV)
 
         # Punti della spezzata
         step = (x1 - x0) / (len(history) - 1)
@@ -2187,9 +2428,9 @@ class AeroGreenHouseGUI:
 
         # Date di inizio e fine serie
         canvas.create_text(x0, y1 + 12, text=self._short_date(history[0]['timestamp']),
-                           anchor=tk.W, fill='#666666', font=('Arial', 8))
+                           anchor=tk.W, fill=self.COL_FAINT, font=(self.FONT_UI, 8))
         canvas.create_text(x1, y1 + 12, text=self._short_date(history[-1]['timestamp']),
-                           anchor=tk.E, fill='#666666', font=('Arial', 8))
+                           anchor=tk.E, fill=self.COL_FAINT, font=(self.FONT_UI, 8))
 
     def _short_date(self, timestamp):
         """Riduce un timestamp 'YYYY/mm/dd HH:MM:SS' a 'dd/mm' per le etichette del grafico."""
@@ -2299,7 +2540,7 @@ class AeroGreenHouseGUI:
         parent, camera_canvas = self._make_scrollable(parent)
 
         # Controlli
-        btn_frame = ttk.LabelFrame(parent, text="Controlli", padding=10)
+        btn_frame = self._card(parent, "Controlli")
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="▶️ Attiva acquisizione", style='Accent.TButton',
@@ -2311,15 +2552,15 @@ class AeroGreenHouseGUI:
         self.camera_preview_btn.pack(side=tk.LEFT, padx=5)
 
         # Ultima foto acquisita
-        photo_frame = ttk.LabelFrame(parent, text="Ultima foto acquisita", padding=15)
+        photo_frame = self._card(parent, "Ultima foto acquisita")
         photo_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.camera_photo_date = ttk.Label(photo_frame, text="Nessuna foto acquisita",
-                                           font=('Arial', 12, 'italic'), foreground='gray')
+                                           font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
         self.camera_photo_date.pack(anchor=tk.W, pady=(0, 8))
 
         self.camera_photo_label = ttk.Label(photo_frame, text="Nessuna immagine disponibile",
-                                            foreground='gray')
+                                            foreground=self.COL_FAINT)
         self.camera_photo_label.pack(anchor=tk.W)
 
         # Come per il plot giornaliero: si ricarica il JPG solo quando cambia
