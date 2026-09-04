@@ -1,6 +1,9 @@
 import glob
 import os
 import threading
+from statistics import median
+
+from managers_classes.arduino_link import ArduinoError
 
 
 # Nome dei file giornalieri scritti da ultrasonic_measurement.save_data
@@ -66,29 +69,41 @@ def load_last_tank(save_dir: str) -> dict:
 
 
 # =====================================================================
-# Categoria SERBATOIO (livello acqua via sensore ultrasonico HC-SR04)
+# Categoria SERBATOIO (livello acqua via HC-SR04 collegato all'Arduino UNO)
 # =====================================================================
 class TankManager():
     '''
     Class per la lettura del livello dell'acqua nel serbatoio tramite il
-    sensore ultrasonico HC-SR04. Riusa la logica di misura definita in
-    ultrasonic_sensor/ultrasonic_measurement.py (nessuna riscrittura della fisica).
+    sensore ultrasonico HC-SR04.
+
+    Il sensore NON e' piu' collegato ai GPIO del Raspberry: e' attaccato a un
+    Arduino UNO, che lo legge su richiesta e restituisce la distanza via
+    seriale USB (vedi managers_classes/arduino_link.py). Il Raspberry
+    conserva la logica di controllo temporizzato e la conversione
+    distanza -> volume, che resta quella di
+    sensors/ultrasonic_sensor/ultrasonic_measurement.py (nessuna riscrittura
+    della fisica).
+
     I parametri di taratura sono letti dalla sezione 'tank' di config.yaml.
     '''
 
-    def __init__(self, configs, logger):
+    def __init__(self, configs, logger, arduino, errors):
         '''
         :param configs: dizionario di configurazione (config.yaml)
         :param logger:  logger condiviso
+        :param arduino: ArduinoHub condiviso (managers_classes/arduino_link.py)
+        :param errors:  ErrorRecorder condiviso (managers_classes/error_log.py)
         '''
         self.configs = configs
         self.logger = logger
+        self._arduino = arduino
+        self._errors = errors
 
         self._thread = None
         self._stop_event = threading.Event()
-        self._gpio_ready = False
 
-        # Riuso del modulo standalone (resta eseguibile da solo)
+        # Riuso del modulo standalone per la sola matematica del volume e per
+        # il salvataggio su file (resta eseguibile da solo con i suoi GPIO).
         from sensors.ultrasonic_sensor import ultrasonic_measurement as tank_mod
         self._tank = tank_mod
 
@@ -98,10 +113,8 @@ class TankManager():
 
     def _params(self):
         '''Legge i parametri dalla sezione 'tank' di config.yaml con fallback alle costanti del modulo.'''
-        t = self.configs.get('tank', {})
+        t = self.configs.get('tank', {}) or {}
         return dict(
-            trig=t.get('trig_pin', self._tank.GPIO_TRIG),
-            echo=t.get('echo_pin', self._tank.GPIO_ECHO),
             height=t.get('tank_height_cm', self._tank.TANK_HEIGHT_CM),
             offset=t.get('sensor_offset_cm', self._tank.SENSOR_OFFSET_CM),
             area=t.get('tank_area_cm2', self._tank.TANK_AREA_CM2),
@@ -119,12 +132,39 @@ class TankManager():
             self.logger.error(f"TANK: errore nella rilettura dell'ultimo dato: {e}")
             return None
 
-    def _ensure_gpio(self, trig, echo):
-        '''Inizializza i pin del sensore una sola volta.'''
-        if not self._gpio_ready:
-            self._tank.initialize_gpio(trig, echo)
-            self._gpio_ready = True
-            self.logger.info(f"TANK: GPIO inizializzati TRIG=GPIO{trig}, ECHO=GPIO{echo}")
+    def _measure_distance(self, n_samples):
+        '''
+        Chiede n_samples letture all'Arduino e ne restituisce la MEDIANA.
+
+        La mediana (e non la media) e' la stessa scelta gia' fatta da
+        ultrasonic_measurement.measure_distance_avg(): un singolo eco
+        spurio non deve spostare la misura.
+
+        A differenza di prima, a ripetere le letture e' il Raspberry: allo
+        sketch Arduino si chiede una misura alla volta, cosi' resta un
+        esecutore semplice e la politica di campionamento resta configurabile
+        da config.yaml.
+
+        :return: distanza in cm, oppure None se nessuna lettura e' riuscita.
+        '''
+        letture = []
+        ultimo_errore = None
+
+        for _ in range(max(1, int(n_samples))):
+            try:
+                letture.append(self._arduino.read_float('US_water'))
+            except ArduinoError as e:
+                ultimo_errore = e
+
+        if not letture:
+            self._errors.record(
+                'US_water',
+                "Non è stato possibile leggere il sensore ultrasonico del serbatoio, "
+                f"controlla il motivo: {ultimo_errore.message if ultimo_errore else 'nessuna lettura valida'}"
+            )
+            return None
+
+        return median(letture)
 
     def read_now(self):
         '''
@@ -136,20 +176,21 @@ class TankManager():
         from datetime import datetime
 
         p = self._params()
-        self._ensure_gpio(p['trig'], p['echo'])
 
-        dist = self._tank.measure_distance_avg(p['trig'], p['echo'], n_samples=p['n'])
+        dist = self._measure_distance(p['n'])
         timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
-        if dist < 0:
-            self.logger.warning("TANK: Misura non valida (timeout o fuori range). "
-                                "Verificare il posizionamento del sensore.")
+        if dist is None:
             return None
 
         # Range fisico del sensore (2-400 cm per HC-SR04)
         if dist < 2.0 or dist > 400.0:
-            self.logger.warning(f"TANK: Distanza {dist:.1f}cm fuori dal range "
-                                "operativo del sensore (2-400cm). Misura ignorata.")
+            self._errors.record(
+                'US_water',
+                f"Non è stato possibile leggere il sensore ultrasonico del serbatoio, "
+                f"controlla il motivo: distanza {dist:.1f}cm fuori dal range operativo "
+                f"(2-400cm). Misura ignorata."
+            )
             return None
 
         result = self._tank.distance_to_water_volume(dist, p['height'], p['offset'], p['area'])
@@ -218,6 +259,6 @@ class TankManager():
                 self.logger.error(f"Errore lettura TANK: {str(e)}")
 
             # Attendi l'intervallo (interrompibile)
-            self._stop_event.wait(p['interval'])
+            self._stop_event.wait(self._params()['interval'])
 
         self.logger.info("Lettura TANK interrotta")

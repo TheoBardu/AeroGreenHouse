@@ -19,6 +19,14 @@ Comandi (il '-' iniziale e' opzionale: '-job active' == 'job active'):
 
     -measure th [now|stop]       temperatura, umidita', VPD
     -measure water [now|stop]    livello del serbatoio
+    -measure ph [now|stop]       pH dell'acqua
+    -measure ec [now|stop]       conducibilita' elettrica dell'acqua
+    -measure growth [now|stop]   altezza delle piante
+
+    -arduino ports               porte USB attualmente collegate
+    -arduino status              sensori configurati e scheda che li serve
+
+    -errors [list|clear]         errori di lettura delle sonde
 
     -camera [start|stop|now]     acquisizione periodica delle foto
     -camera preview [on|off]     anteprima dal vivo (richiede un display)
@@ -44,6 +52,7 @@ from datetime import datetime
 import yaml
 
 from helper_aeroGreenHouse import aeroHelper
+from managers_classes import arduino_link
 
 
 # Formato dei timestamp scritti dai manager (vedi ambient/tank/spectro).
@@ -90,6 +99,9 @@ class AeroCLI():
             'job': self.cmd_job,
             'measure': self.cmd_measure,
             'mesure': self.cmd_measure,   # alias tollerato
+            'arduino': self.cmd_arduino,
+            'errors': self.cmd_errors,
+            'errori': self.cmd_errors,   # alias tollerato
             'camera': self.cmd_camera,
             'daily': self.cmd_daily,
             'details': self.cmd_details,
@@ -173,6 +185,8 @@ class AeroCLI():
         stati.append(('Lettura Ambient (T/H/VPD)', self.ah.ambient.is_running()))
         stati.append(('Controllo Climatizzatore', self.ah.climate.is_running()))
         stati.append(('Lettura Serbatoio', self.ah.tank.is_running()))
+        stati.append(('Lettura pH', self.ah.water.is_ph_running()))
+        stati.append(('Lettura EC', self.ah.water.is_ec_running()))
         stati.append(('Lettura Spettrometro', self.ah.spectro.is_running()))
         stati.append(('Misura Crescita', self.ah.plant_growth.is_running()))
         stati.append(('Acquisizione Camera', self.ah.camera.is_acquiring()))
@@ -279,21 +293,26 @@ class AeroCLI():
     # -measure
     # ------------------------------------------------------------------
 
+    # Grandezze misurabili: nome del comando -> metodo che la gestisce.
+    # Tenerle in tabella evita una catena di if e rende l'errore di comando
+    # sbagliato autoesplicativo (elenca da solo le grandezze valide).
+    MEASURE_KINDS = ('th', 'water', 'ph', 'ec', 'growth')
+
     def cmd_measure(self, args):
-        '''Misure in tempo reale: th (T/H/VPD) e water (serbatoio).'''
+        '''Misure in tempo reale: th, water (serbatoio), ph, ec, growth.'''
         if not args:
-            print('Uso: -measure th [now|stop] | -measure water [now|stop]')
+            print(f"Uso: -measure <{'|'.join(self.MEASURE_KINDS)}> [now|stop]")
             return
 
         grandezza = args[0].lower()
         azione = args[1].lower() if len(args) > 1 else 'start'
 
-        if grandezza == 'th':
-            self._measure_th(azione)
-        elif grandezza == 'water':
-            self._measure_water(azione)
-        else:
-            print(f"Grandezza sconosciuta: '{grandezza}'. Usa 'th' o 'water'.")
+        if grandezza not in self.MEASURE_KINDS:
+            print(f"Grandezza sconosciuta: '{grandezza}'. "
+                  f"Usa una fra: {', '.join(self.MEASURE_KINDS)}.")
+            return
+
+        getattr(self, f'_measure_{grandezza}')(azione)
 
     def _print_th(self, temp, humidity, vpd, timestamp):
         '''Riga di stampa condivisa fra lettura singola e lettura continua.'''
@@ -346,6 +365,152 @@ class AeroCLI():
                 print('Lettura serbatoio gia\' in corso.')
         else:
             print(f"Azione sconosciuta: '{azione}'. Usa 'now' o 'stop'.")
+
+    def _print_ph(self, result):
+        '''Riga di stampa condivisa per le misure di pH.'''
+        print(f"[{result['timestamp']}] pH = {result['ph']:.2f}")
+
+    def _measure_ph(self, azione):
+        '''Lettura del pH dell'acqua tramite WaterManager (sonda su Arduino).'''
+        self._measure_generic(
+            azione, nome='pH',
+            read_now=self.ah.water.read_ph_now,
+            start=self.ah.water.start_ph_reading,
+            stop=self.ah.water.stop_ph_reading,
+            stampa=self._print_ph)
+
+    def _print_ec(self, result):
+        '''Riga di stampa condivisa per le misure di conducibilita'.'''
+        print(f"[{result['timestamp']}] "
+              f"EC = {result['ec_us_cm']:.1f} uS/cm | "
+              f"TDS = {result['tds_ppm']:.1f} ppm | "
+              f"salinita' = {result['salinity_psu']:.2f} PSU")
+
+    def _measure_ec(self, azione):
+        '''Lettura della conducibilita' elettrica tramite WaterManager.'''
+        self._measure_generic(
+            azione, nome='EC',
+            read_now=self.ah.water.read_ec_now,
+            start=self.ah.water.start_ec_reading,
+            stop=self.ah.water.stop_ec_reading,
+            stampa=self._print_ec)
+
+    def _print_growth(self, result):
+        '''Riga di stampa condivisa per le misure di altezza pianta.'''
+        print(f"[{result['timestamp']}] "
+              f"altezza = {result['h_plant_cm']} cm | "
+              f"distanza = {result['distance_cm']} cm")
+
+    def _measure_growth(self, azione):
+        '''Misura dell'altezza delle piante tramite PlantGrowthManager.'''
+        self._measure_generic(
+            azione, nome='crescita',
+            read_now=self.ah.plant_growth.read_now,
+            start=self.ah.plant_growth.start_reading,
+            stop=self.ah.plant_growth.stop_reading,
+            stampa=self._print_growth)
+
+    def _measure_generic(self, azione, nome, read_now, start, stop, stampa):
+        '''
+        Schema comune a tutte le misure su sonda: now / start / stop.
+
+        Le tre grandezze lette dall'Arduino si comportano allo stesso modo,
+        quindi la logica sta qui una volta sola; il motivo di un fallimento
+        e' gia' registrato dal manager negli errori, per questo qui si
+        rimanda semplicemente a '-errors list'.
+        '''
+        if azione == 'now':
+            result = read_now()
+            if result is None:
+                print(f"Misura {nome} non riuscita. Usa '-errors list' per il motivo.")
+                return
+            stampa(result)
+        elif azione == 'stop':
+            if stop():
+                print(f"Lettura {nome} arrestata.")
+            else:
+                print(f"Nessuna lettura {nome} in corso.")
+        elif azione == 'start':
+            if start(on_update=stampa):
+                print(f"Lettura {nome} avviata.")
+            else:
+                print(f"Lettura {nome} gia' in corso.")
+        else:
+            print(f"Azione sconosciuta: '{azione}'. Usa 'now' o 'stop'.")
+
+    # ------------------------------------------------------------------
+    # -arduino
+    # ------------------------------------------------------------------
+
+    def cmd_arduino(self, args):
+        '''Diagnostica del collegamento con le schede Arduino.'''
+        azione = args[0].lower() if args else 'status'
+
+        if azione == 'ports':
+            self._arduino_ports()
+        elif azione == 'status':
+            self._arduino_status()
+        else:
+            print(f"Azione sconosciuta: '{azione}'. Usa 'ports' o 'status'.")
+
+    def _arduino_ports(self):
+        '''Porte USB attualmente collegate, come le vede il Raspberry.'''
+        porte = arduino_link.list_serial_ports()
+        if not porte:
+            print('Nessuna porta USB rilevata.')
+            return
+        print(f"{'PORTA':<20}{'DESCRIZIONE'}")
+        for p in porte:
+            print(f"{p['device']:<20}{p['description']}")
+
+    def _arduino_status(self):
+        '''
+        Per ogni sensore: scheda, comando che verra' inviato ed esito.
+
+        Fa una lettura vera, non un semplice controllo di configurazione: e'
+        il modo piu' rapido per capire se i pin scritti nel config sono quelli
+        realmente cablati.
+        '''
+        hub = self.ah.arduino
+        print(f"{'SENSORE':<12}{'SCHEDA':<12}{'COMANDO':<18}{'ESITO'}")
+        for key in arduino_link.SENSOR_KEYS:
+            board = hub.board_for(key)
+            if board is None:
+                print(f"{key:<12}{'-':<12}{'-':<18}non configurato")
+                continue
+
+            comando = board.command_preview(key)
+            try:
+                valore = hub.read_raw(key)
+                esito = valore
+            except arduino_link.ArduinoError as e:
+                esito = f"ERRORE: {e.message}"
+            print(f"{key:<12}{board.name:<12}{comando:<18}{esito}")
+
+    # ------------------------------------------------------------------
+    # -errors
+    # ------------------------------------------------------------------
+
+    def cmd_errors(self, args):
+        '''Errori di lettura delle sonde: elenco o pulizia.'''
+        azione = args[0].lower() if args else 'list'
+
+        if azione == 'list':
+            self._errors_list()
+        elif azione == 'clear':
+            self.ah.errors.clear()
+            print('Elenco degli errori svuotato (i file su disco restano).')
+        else:
+            print(f"Azione sconosciuta: '{azione}'. Usa 'list' o 'clear'.")
+
+    def _errors_list(self):
+        '''Stampa gli errori registrati, dal piu' vecchio al piu' recente.'''
+        errori = self.ah.errors.recent()
+        if not errori:
+            print('Nessun errore di lettura registrato.')
+            return
+        for e in errori:
+            print(f"[{e['timestamp']}] {e['source']} - {e['message']}")
 
     # ------------------------------------------------------------------
     # -camera
@@ -473,10 +638,12 @@ class AeroCLI():
         print('=' * 52)
         self._details_ambiente()
         self._details_serbatoio()
+        self._details_acqua()
         self._details_mcari2()
         self._details_crescita()
         self._details_camera()
         self._details_giornaliera()
+        self._details_errori()
         self._details_processi()
         print('=' * 52)
 
@@ -493,8 +660,8 @@ class AeroCLI():
         print(f"  Acquisito   : {format_acq_date(r.get('timestamp'))}")
 
     def _details_serbatoio(self):
-        '''Ultima misura del serbatoio.'''
-        print('\n-- Serbatoio --')
+        '''Ultima misura del livello del serbatoio.'''
+        print('\n-- Serbatoio (livello) --')
         r = self.ah.tank.last_result
         if not r:
             print(f"  Nessun dato disponibile ({ND})")
@@ -502,6 +669,40 @@ class AeroCLI():
         print(f"  Volume      : {r['volume_L']:.2f} L")
         print(f"  Riempimento : {r['fill_percent']} %")
         print(f"  Misurato    : {format_acq_date(r.get('timestamp'))}")
+
+    def _details_acqua(self):
+        '''Ultime misure di pH ed EC (sonde Atlas collegate all'Arduino).'''
+        print('\n-- Acqua (pH / EC) --')
+        ph = self.ah.water.last_ph
+        ec = self.ah.water.last_ec
+
+        if not ph and not ec:
+            print(f"  Nessun dato disponibile ({ND})")
+            return
+
+        if ph:
+            print(f"  pH          : {ph['ph']:.2f}"
+                  f"   (misurato {format_acq_date(ph.get('timestamp'))})")
+        else:
+            print(f"  pH          : {ND}")
+
+        if ec:
+            print(f"  EC          : {ec['ec_us_cm']:.1f} uS/cm"
+                  f"   (misurato {format_acq_date(ec.get('timestamp'))})")
+            print(f"  TDS         : {ec['tds_ppm']:.1f} ppm")
+            print(f"  Salinita'   : {ec['salinity_psu']:.2f} PSU")
+        else:
+            print(f"  EC          : {ND}")
+
+    def _details_errori(self):
+        '''Ultimi errori di lettura ('-errors list' per l'elenco completo).'''
+        print('\n-- Errori di lettura --')
+        errori = self.ah.errors.recent(5)
+        if not errori:
+            print('  Nessun errore registrato')
+            return
+        for e in errori:
+            print(f"  [{e['timestamp']}] {e['source']} - {e['message']}")
 
     def _details_mcari2(self):
         '''Ultimo indice MCARI2. Attenzione: spectro.history e' piu' recente in testa.'''

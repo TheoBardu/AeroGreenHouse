@@ -10,6 +10,7 @@ import logging
 from queue import Queue
 
 from helper_aeroGreenHouse import aeroHelper
+from managers_classes import arduino_link
 from sensors.spectrometer import mcari2_as7265x as spectro
 
 
@@ -165,6 +166,18 @@ class AeroGreenHouseGUI:
                 self.output_text.config(state=tk.DISABLED)
         except:
             pass
+
+        # La sezione Errori si aggiorna da sola: chi la guarda si aspetta di
+        # vedere comparire un errore appena la lettura fallisce, senza dover
+        # premere "Aggiorna". Il refresh e' piu' lento del log (2s) perche'
+        # ridisegna tutto il Text.
+        self._errors_refresh_countdown = getattr(self, '_errors_refresh_countdown', 0) - 1
+        if self._errors_refresh_countdown <= 0:
+            self._errors_refresh_countdown = 20  # 20 * 100ms = 2s
+            try:
+                self.refresh_errors()
+            except AttributeError:
+                pass  # la scheda Log non e' ancora stata costruita
 
         # Schedule next check
         self.root.after(100, self.process_log_queue)
@@ -351,8 +364,8 @@ class AeroGreenHouseGUI:
         ('clima', '\u2744', 'Clima', 'Climatizzatore',
          'Controllo automatico del condizionatore via infrarossi.',
          'create_climatizzatore_tab'),
-        ('tank', '\U0001f4a7', 'Serbatoio', 'Livelli serbatoio',
-         'Volume e riempimento misurati dal sensore ultrasonico.',
+        ('tank', '\U0001f4a7', 'H2O', 'H2O',
+         'Livello del serbatoio, pH e conducibilita\u0300 elettrica dell\'acqua.',
          'create_tank_tab'),
         ('spectro', '\u25d0', 'Spettro', 'Spettrometro',
          'Indice MCARI2 e stato di salute della coltura.',
@@ -652,19 +665,74 @@ class AeroGreenHouseGUI:
         self.ir_H_max_var = tk.StringVar(value=str(self.config.get('ir_control', {}).get('H_max', 65.0)))
         ttk.Entry(ir_frame, textvariable=self.ir_H_max_var, width=10).grid(row=2, column=3, sticky=tk.W)
 
+        # Frame per le schede Arduino
+        self._build_arduino_config_card(parent)
+
+        # Frame per Acqua (pH / EC)
+        water_cfg_frame = self._card(parent, "Acqua — pH e conducibilità elettrica")
+        water_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        w = self.config.get('water', {})
+
+        ttk.Label(water_cfg_frame, text="Intervallo lettura pH (s):").grid(row=0, column=0, sticky=tk.W)
+        self.water_ph_interval_var = tk.StringVar(value=str(w.get('ph_read_interval', 1800)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_ph_interval_var,
+                  width=10).grid(row=0, column=1, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="Intervallo lettura EC (s):").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
+        self.water_ec_interval_var = tk.StringVar(value=str(w.get('ec_read_interval', 1800)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_ec_interval_var,
+                  width=10).grid(row=0, column=3, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="pH minimo:").grid(row=1, column=0, sticky=tk.W)
+        self.water_ph_min_var = tk.StringVar(value=str(w.get('ph_min', 5.5)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_ph_min_var,
+                  width=10).grid(row=1, column=1, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="pH massimo:").grid(row=1, column=2, sticky=tk.W, padx=(20, 0))
+        self.water_ph_max_var = tk.StringVar(value=str(w.get('ph_max', 6.5)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_ph_max_var,
+                  width=10).grid(row=1, column=3, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="EC minima (µS/cm):").grid(row=2, column=0, sticky=tk.W)
+        self.water_ec_min_var = tk.StringVar(value=str(w.get('ec_min', 800)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_ec_min_var,
+                  width=10).grid(row=2, column=1, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="EC massima (µS/cm):").grid(row=2, column=2, sticky=tk.W, padx=(20, 0))
+        self.water_ec_max_var = tk.StringVar(value=str(w.get('ec_max', 2000)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_ec_max_var,
+                  width=10).grid(row=2, column=3, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="Cifre decimali:").grid(row=3, column=0, sticky=tk.W)
+        self.water_decimals_var = tk.StringVar(value=str(w.get('decimals', 2)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_decimals_var,
+                  width=10).grid(row=3, column=1, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="N. misure nello storico:").grid(row=3, column=2, sticky=tk.W, padx=(20, 0))
+        self.water_history_var = tk.StringVar(value=str(w.get('history_len', 30)))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_history_var,
+                  width=10).grid(row=3, column=3, sticky=tk.W)
+
+        ttk.Label(water_cfg_frame, text="Directory dati:").grid(row=4, column=0, sticky=tk.W)
+        self.water_dir_var = tk.StringVar(
+            value=w.get('saving_dir', '/home/fishnplants/Desktop/data/WATER/'))
+        ttk.Entry(water_cfg_frame, textvariable=self.water_dir_var, width=50).grid(
+            row=4, column=1, columnspan=3, sticky=tk.W)
+
         # Frame per Serbatoio (Tank)
-        tank_cfg_frame = self._card(parent, "Serbatoio (Tank) — sensore ultrasonico HC-SR04")
+        tank_cfg_frame = self._card(parent, "Serbatoio (Tank) — taratura della tanica")
         tank_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         tank = self.config.get('tank', {})
 
-        ttk.Label(tank_cfg_frame, text="TRIG Pin GPIO:").grid(row=0, column=0, sticky=tk.W)
-        self.tank_trig_var = tk.StringVar(value=str(tank.get('trig_pin', 23)))
-        ttk.Entry(tank_cfg_frame, textvariable=self.tank_trig_var, width=10).grid(row=0, column=1, sticky=tk.W)
-
-        ttk.Label(tank_cfg_frame, text="ECHO Pin GPIO:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
-        self.tank_echo_var = tk.StringVar(value=str(tank.get('echo_pin', 24)))
-        ttk.Entry(tank_cfg_frame, textvariable=self.tank_echo_var, width=10).grid(row=0, column=3, sticky=tk.W)
+        # I pin del sensore non stanno piu' qui: l'HC-SR04 e' collegato
+        # all'Arduino, quindi si configurano nella card "Schede Arduino".
+        ttk.Label(tank_cfg_frame,
+                  text="Sensore ultrasonico collegato all'Arduino: i pin si impostano "
+                       "nella card «Schede Arduino» (sensore US_water).",
+                  foreground=self.COL_FAINT).grid(row=0, column=0, columnspan=4,
+                                                  sticky=tk.W, pady=(0, 6))
 
         ttk.Label(tank_cfg_frame, text="Altezza tanica (cm):").grid(row=1, column=0, sticky=tk.W)
         self.tank_height_var = tk.StringVar(value=str(tank.get('tank_height_cm', 30.0)))
@@ -711,7 +779,7 @@ class AeroGreenHouseGUI:
             row=1, column=1, columnspan=3, sticky=tk.EW)
 
         # Frame per Crescita (plant_growth)
-        growth_cfg_frame = self._card(parent, "Crescita (altezza pianta) — sensore ultrasonico HC-SR04")
+        growth_cfg_frame = self._card(parent, "Crescita (altezza pianta)")
         growth_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
 
         g = self.config.get('plant_growth', {})
@@ -722,13 +790,11 @@ class AeroGreenHouseGUI:
         ttk.Label(growth_cfg_frame, text="(impostata dal bottone 📐 Calibrazione nella tab Crescita)",
                   foreground=self.COL_FAINT).grid(row=0, column=2, columnspan=2, sticky=tk.W, padx=(20, 0))
 
-        ttk.Label(growth_cfg_frame, text="TRIG Pin GPIO:").grid(row=1, column=0, sticky=tk.W)
-        self.growth_trig_var = tk.StringVar(value=str(g.get('trig_pin', 5)))
-        ttk.Entry(growth_cfg_frame, textvariable=self.growth_trig_var, width=10).grid(row=1, column=1, sticky=tk.W)
-
-        ttk.Label(growth_cfg_frame, text="ECHO Pin GPIO:").grid(row=1, column=2, sticky=tk.W, padx=(20, 0))
-        self.growth_echo_var = tk.StringVar(value=str(g.get('echo_pin', 6)))
-        ttk.Entry(growth_cfg_frame, textvariable=self.growth_echo_var, width=10).grid(row=1, column=3, sticky=tk.W)
+        ttk.Label(growth_cfg_frame,
+                  text="Sensore ultrasonico collegato all'Arduino: i pin si impostano "
+                       "nella card «Schede Arduino» (sensore US_plant).",
+                  foreground=self.COL_FAINT).grid(row=1, column=0, columnspan=4,
+                                                  sticky=tk.W, pady=(4, 4))
 
         ttk.Label(growth_cfg_frame, text="Intervallo misura (giorni):").grid(row=2, column=0, sticky=tk.W)
         self.growth_interval_var = tk.StringVar(value=str(g.get('read_interval_days', 1)))
@@ -859,8 +925,10 @@ class AeroGreenHouseGUI:
         self.riep_amb_gauge, self.riep_amb_labels, self.riep_amb_date = self._build_riep_card(
             grid, 0, 0, "Ambiente", ("Temperatura", "VPD"))
 
+        # Il blocco H2O riassume tutta l'acqua: quanta ce n'e' (arco sul
+        # riempimento) e com'e' fatta (pH ed EC dalle sonde su Arduino).
         self.riep_tank_gauge, self.riep_tank_labels, self.riep_tank_date = self._build_riep_card(
-            grid, 0, 1, "Serbatoio", ("Volume",))
+            grid, 0, 1, "H2O", ("Volume", "pH", "EC"))
 
         self.riep_mcari_gauge, self.riep_mcari_labels, self.riep_mcari_date = self._build_riep_card(
             grid, 0, 2, "Indice MCARI2", ("Stato",))
@@ -1024,10 +1092,25 @@ class AeroGreenHouseGUI:
         self.riep_amb_date.config(text=f"Acquisito: {self._format_acq_date(r['timestamp'])}")
 
     def _refresh_riep_serbatoio(self, force):
-        """Blocco Serbatoio: arco sul riempimento, numero per il volume."""
+        """Blocco H2O: arco sul riempimento, piu' volume, pH ed EC."""
         r = self.ah.tank.last_result
-        if not self._cambiato('serbatoio', None if r is None else tuple(r.values()), force):
+        ph = self.ah.water.last_ph
+        ec = self.ah.water.last_ec
+
+        # La firma comprende anche pH ed EC: le tre grandezze si aggiornano
+        # con cadenze diverse, e il blocco va ridisegnato appena UNA cambia.
+        firma = (
+            None if r is None else tuple(r.values()),
+            None if ph is None else ph.get('ph'),
+            None if ec is None else ec.get('ec_us_cm'),
+        )
+        if not self._cambiato('serbatoio', firma, force):
             return
+
+        self.riep_tank_labels['pH'].config(
+            text="--" if ph is None else f"{ph['ph']:.2f}")
+        self.riep_tank_labels['EC'].config(
+            text="--" if ec is None else f"{ec['ec_us_cm']:.0f} µS/cm")
 
         if r is None:
             self._draw_arc_gauge(self.riep_tank_gauge, None, 0, 100, 'gray', "--", "Riempimento (%)")
@@ -1144,6 +1227,8 @@ class AeroGreenHouseGUI:
         states.append(("Lettura Ambient (T/H)", self.ah.ambient.is_running()))
         states.append(("Controllo Climatizzatore", self.ah.climate.is_running()))
         states.append(("Lettura Serbatoio", self.ah.tank.is_running()))
+        states.append(("Lettura pH", self.ah.water.is_ph_running()))
+        states.append(("Lettura EC", self.ah.water.is_ec_running()))
         states.append(("Lettura Spettrometro", self.ah.spectro.is_running()))
         states.append(("Misura Crescita", self.ah.plant_growth.is_running()))
         states.append(("Acquisizione Camera", self.ah.camera.is_acquiring()))
@@ -1271,6 +1356,35 @@ class AeroGreenHouseGUI:
                                        fg=self.COL_PRIMARY, font=(self.FONT_MONO, 9))
         self.log_file_label.pack(side=tk.LEFT, padx=5)
 
+        # Sezione dedicata ai soli errori di lettura delle sonde.
+        # Sta prima dell'output completo perche' e' cio' che si va a
+        # guardare per primo quando una misura non arriva: nel flusso del
+        # log generale un errore si perde fra centinaia di righe INFO.
+        errors_frame = self._card(parent, "Errori di lettura")
+        errors_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        err_btns = tk.Frame(errors_frame, bg=self.COL_CARD)
+        err_btns.pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(err_btns, text="🔄 Aggiorna errori",
+                   command=self.refresh_errors).pack(side=tk.LEFT, padx=5)
+        ttk.Button(err_btns, text="🧹 Pulisci",
+                   command=self.clear_errors).pack(side=tk.LEFT, padx=5)
+        self.errors_count_label = tk.Label(err_btns, text="", bg=self.COL_CARD,
+                                           fg=self.COL_FAINT, font=(self.FONT_UI, 9))
+        self.errors_count_label.pack(side=tk.LEFT, padx=10)
+
+        err_scroll = ttk.Scrollbar(errors_frame)
+        err_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.errors_text = tk.Text(errors_frame, yscrollcommand=err_scroll.set,
+                                   wrap=tk.WORD, font=(self.FONT_MONO, 9), height=8,
+                                   bg="#16211c", fg="#dfe6e2", insertbackground="white",
+                                   relief=tk.FLAT, borderwidth=0, padx=10, pady=8)
+        self.errors_text.pack(fill=tk.BOTH, expand=True)
+        err_scroll.config(command=self.errors_text.yview)
+        self.errors_text.tag_config('error', foreground='#ff8a80')
+        self.errors_text.tag_config('vuoto', foreground='#8a968f')
+
         # Frame per il testo (output)
         text_frame = self._card(parent, "Output Terminale")
         text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1297,11 +1411,50 @@ class AeroGreenHouseGUI:
 
         # Carica il contenuto iniziale
         self.refresh_output()
+        self.refresh_errors()
 
         # NB: la rotella non viene agganciata al Text dell'output — li' deve
         # scorrere il log, non la pagina. Il resto della scheda sì.
         self._bind_mousewheel(btn_frame, output_canvas)
         self._bind_mousewheel(info_frame, output_canvas)
+
+    def refresh_errors(self):
+        """
+        Riempie la sezione "Errori di lettura" con gli errori registrati.
+
+        La sorgente e' ErrorRecorder, non il file di log: contiene solo i
+        fallimenti delle sonde, gia' con la frase che spiega cosa controllare.
+        """
+        errori = self.ah.errors.recent()
+
+        self.errors_text.config(state=tk.NORMAL)
+        self.errors_text.delete(1.0, tk.END)
+
+        if not errori:
+            self.errors_text.insert(tk.END, "Nessun errore di lettura registrato.\n", 'vuoto')
+        else:
+            for e in errori:
+                self.errors_text.insert(
+                    tk.END, f"[{e['timestamp']}] {e['source']} — {e['message']}\n", 'error')
+            self.errors_text.see(tk.END)
+
+        self.errors_text.config(state=tk.DISABLED)
+        if not errori:
+            testo = "nessun errore"
+        else:
+            testo = f"{len(errori)} errore registrato" if len(errori) == 1 \
+                else f"{len(errori)} errori registrati"
+        self.errors_count_label.config(text=testo)
+
+    def clear_errors(self):
+        """
+        Svuota l'elenco degli errori mostrato.
+
+        Pulisce solo la lista in memoria: i file ERRORS_*.txt su disco
+        restano, perche' sono quelli che finiscono nell'upload giornaliero.
+        """
+        self.ah.errors.clear()
+        self.refresh_errors()
 
     def refresh_jobs_list(self):
         """Aggiorna la lista dei job nel Treeview"""
@@ -1497,6 +1650,285 @@ class AeroGreenHouseGUI:
     # ------------------------------------------------------------------
     # Salvataggio / ricarica configurazione
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Configurazione: card "Schede Arduino"
+    # ------------------------------------------------------------------
+    def _build_arduino_config_card(self, parent):
+        """
+        Card di configurazione delle schede Arduino.
+
+        A differenza delle altre card, che hanno campi fissi, questa e'
+        ricostruita ogni volta: le porte USB disponibili si scoprono solo a
+        run-time, e le schede possono essere piu' di una.
+
+        L'elenco dei sensori e dei relativi comandi arriva da
+        arduino_link.SENSOR_SPECS: i nomi dei comandi sono FISSI (li conosce
+        solo lo sketch) e vengono mostrati in sola lettura, mentre i pin sono
+        modificabili, perche' sono l'unica cosa che cambia col cablaggio.
+        """
+        card = self._card(parent, "Schede Arduino — porte USB e pin delle sonde")
+        card.pack(fill=tk.X, padx=10, pady=10)
+
+        a = self.config.get('arduino', {}) or {}
+
+        top = tk.Frame(card, bg=self.COL_CARD)
+        top.pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(top, text="🔍 Rileva schede",
+                   command=self.detect_arduino_boards).pack(side=tk.LEFT, padx=5)
+
+        tk.Label(top, text="Baudrate:", bg=self.COL_CARD,
+                 fg=self.COL_TEXT).pack(side=tk.LEFT, padx=(20, 4))
+        self.arduino_baudrate_var = tk.StringVar(value=str(a.get('baudrate', 9600)))
+        ttk.Entry(top, textvariable=self.arduino_baudrate_var, width=8).pack(side=tk.LEFT)
+
+        tk.Label(top, text="Timeout (s):", bg=self.COL_CARD,
+                 fg=self.COL_TEXT).pack(side=tk.LEFT, padx=(20, 4))
+        self.arduino_timeout_var = tk.StringVar(value=str(a.get('timeout', 15)))
+        ttk.Entry(top, textvariable=self.arduino_timeout_var, width=8).pack(side=tk.LEFT)
+
+        # Contenitore delle schede: svuotato e ricostruito ad ogni scansione
+        self.arduino_boards_frame = tk.Frame(card, bg=self.COL_CARD)
+        self.arduino_boards_frame.pack(fill=tk.X)
+
+        self._render_arduino_boards()
+
+    def _arduino_boards_to_show(self):
+        """
+        Elenco delle schede da mostrare: quelle configurate piu' quelle rilevate.
+
+        Una scheda gia' configurata ma non collegata in questo momento resta
+        in elenco (segnalata come non collegata): toglierla dalla vista
+        significherebbe perderne la configurazione al primo salvataggio.
+
+        :return: lista di dict {'port', 'name', 'enabled', 'sensors', 'description', 'collegata'}
+        """
+        rilevate = {}
+        for porta in getattr(self, '_arduino_detected', []):
+            rilevate[porta['device']] = porta.get('description', '')
+
+        schede = []
+        configurate = set()
+        for voce in (self.config.get('arduino', {}) or {}).get('boards', []) or []:
+            porta = voce.get('port', '')
+            configurate.add(porta)
+            schede.append({
+                'port': porta,
+                'name': voce.get('name', porta),
+                'enabled': voce.get('enabled', True),
+                'sensors': voce.get('sensors', {}) or {},
+                'description': rilevate.get(porta, ''),
+                'collegata': porta in rilevate,
+            })
+
+        # Porte rilevate ma non ancora configurate: si offrono da spuntare
+        for i, (porta, descrizione) in enumerate(sorted(rilevate.items()), start=1):
+            if porta in configurate:
+                continue
+            schede.append({
+                'port': porta,
+                'name': f"Board{len(schede) + i}",
+                'enabled': False,
+                'sensors': {},
+                'description': descrizione,
+                'collegata': True,
+            })
+
+        return schede
+
+    def _render_arduino_boards(self):
+        """Ridisegna il blocco di ogni scheda e ricrea le variabili collegate."""
+        for widget in self.arduino_boards_frame.winfo_children():
+            widget.destroy()
+
+        # Struttura da cui save_config_changes ricostruisce arduino.boards:
+        # i widget nascono dalla scansione, quindi non esistono StringVar
+        # fisse come nelle altre card.
+        self.arduino_board_vars = []
+
+        schede = self._arduino_boards_to_show()
+        if not schede:
+            tk.Label(self.arduino_boards_frame,
+                     text="Nessuna scheda configurata. Premi «Rileva schede» con "
+                          "l'Arduino collegato via USB.",
+                     bg=self.COL_CARD, fg=self.COL_FAINT).pack(anchor=tk.W, pady=6)
+            return
+
+        for scheda in schede:
+            self._render_one_board(scheda)
+
+    def _render_one_board(self, scheda):
+        """Disegna il blocco di una singola scheda, con le righe dei sensori."""
+        blocco = tk.Frame(self.arduino_boards_frame, bg=self.COL_CARD,
+                          highlightbackground=self.COL_BORDER, highlightthickness=1)
+        blocco.pack(fill=tk.X, pady=6)
+
+        intestazione = tk.Frame(blocco, bg=self.COL_CARD)
+        intestazione.pack(fill=tk.X, padx=8, pady=(6, 2))
+
+        enabled_var = tk.BooleanVar(value=scheda['enabled'])
+        ttk.Checkbutton(intestazione, text="Usa questa scheda",
+                        variable=enabled_var).pack(side=tk.LEFT)
+
+        name_var = tk.StringVar(value=scheda['name'])
+        tk.Label(intestazione, text="Nome:", bg=self.COL_CARD,
+                 fg=self.COL_TEXT).pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Entry(intestazione, textvariable=name_var, width=12).pack(side=tk.LEFT)
+
+        port_var = tk.StringVar(value=scheda['port'])
+        tk.Label(intestazione, text="Porta:", bg=self.COL_CARD,
+                 fg=self.COL_TEXT).pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Entry(intestazione, textvariable=port_var, width=18).pack(side=tk.LEFT)
+
+        if scheda['collegata']:
+            stato, colore = "● collegata", self.COL_OK
+        else:
+            stato, colore = "○ non collegata", self.COL_WARN
+        tk.Label(intestazione, text=stato, bg=self.COL_CARD, fg=colore,
+                 font=(self.FONT_UI, 9, 'bold')).pack(side=tk.LEFT, padx=(16, 0))
+
+        if scheda['description']:
+            tk.Label(blocco, text=scheda['description'], bg=self.COL_CARD,
+                     fg=self.COL_FAINT, font=(self.FONT_UI, 9)).pack(anchor=tk.W, padx=8)
+
+        sensori_vars = {}
+        for key in arduino_link.SENSOR_KEYS:
+            sensori_vars[key] = self._render_sensor_row(blocco, scheda, key, port_var)
+
+        self.arduino_board_vars.append({
+            'enabled': enabled_var,
+            'name': name_var,
+            'port': port_var,
+            'sensors': sensori_vars,
+        })
+
+    def _render_sensor_row(self, blocco, scheda, key, port_var):
+        """
+        Una riga per sensore: comando (fisso), pin (modificabili), anteprima.
+
+        :return: dict {'enabled': BooleanVar, 'args': {chiave: StringVar}}
+        """
+        spec = arduino_link.SENSOR_SPECS[key]
+        cfg = scheda['sensors'].get(key, {}) or {}
+
+        riga = tk.Frame(blocco, bg=self.COL_CARD)
+        riga.pack(fill=tk.X, padx=8, pady=2)
+
+        collegato_var = tk.BooleanVar(value=key in scheda['sensors'])
+        ttk.Checkbutton(riga, text=key, variable=collegato_var,
+                        width=10).pack(side=tk.LEFT)
+
+        # Il nome del comando lo decide lo sketch, non l'utente: si mostra
+        # come etichetta e non come campo, per non lasciar credere che
+        # cambiarlo abbia un effetto.
+        tk.Label(riga, text=spec['command'], bg=self.COL_CARD, fg=self.COL_PRIMARY,
+                 font=(self.FONT_MONO, 9), width=10).pack(side=tk.LEFT, padx=(0, 8))
+
+        args_vars = {}
+        for chiave, etichetta, default in spec['args']:
+            tk.Label(riga, text=f"{etichetta}:", bg=self.COL_CARD,
+                     fg=self.COL_TEXT).pack(side=tk.LEFT, padx=(8, 2))
+            var = tk.StringVar(value=str(cfg.get(chiave, default)))
+            ttk.Entry(riga, textvariable=var, width=6).pack(side=tk.LEFT)
+            args_vars[chiave] = var
+
+        anteprima = tk.Label(riga, text="", bg=self.COL_CARD, fg=self.COL_FAINT,
+                             font=(self.FONT_MONO, 9))
+        anteprima.pack(side=tk.LEFT, padx=(16, 0))
+
+        def aggiorna_anteprima(*_):
+            """Mostra il comando che verra' realmente inviato all'Arduino."""
+            valori = ','.join(v.get().strip() for _c, v in args_vars.items())
+            anteprima.config(text=f"→ {spec['command']},{valori}" if valori
+                             else f"→ {spec['command']}")
+
+        for var in args_vars.values():
+            var.trace_add('write', aggiorna_anteprima)
+        aggiorna_anteprima()
+
+        ttk.Button(riga, text="🔌 Prova",
+                   command=lambda k=key: self.test_arduino_sensor(k)).pack(side=tk.RIGHT, padx=5)
+
+        return {'enabled': collegato_var, 'args': args_vars}
+
+    def detect_arduino_boards(self):
+        """Cerca le porte USB collegate e ridisegna l'elenco delle schede."""
+        try:
+            self._arduino_detected = arduino_link.list_serial_ports()
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile elencare le porte USB: {e}")
+            return
+
+        self._render_arduino_boards()
+
+        if not self._arduino_detected:
+            messagebox.showwarning(
+                "Avviso", "Nessuna porta USB rilevata.\n"
+                          "Verifica che l'Arduino sia collegato e acceso.")
+        else:
+            elenco = "\n".join(f"{p['device']} — {p['description']}"
+                                for p in self._arduino_detected)
+            messagebox.showinfo("Schede rilevate", elenco)
+
+    def test_arduino_sensor(self, sensor_key):
+        """
+        Legge subito un sensore con la configurazione attualmente salvata.
+
+        Serve a verificare i pin senza uscire dalla schermata; usa la
+        configurazione gia' applicata, quindi va premuto DOPO «Salva».
+        """
+        try:
+            valori = self.ah.arduino.read_named(sensor_key)
+        except Exception as e:
+            messagebox.showerror(
+                "Lettura fallita",
+                f"{arduino_link.sensor_label(sensor_key)}:\n{e}\n\n"
+                "Se hai appena modificato i pin, salva prima la configurazione.")
+            return
+
+        spec = arduino_link.SENSOR_SPECS[sensor_key]
+        righe = [f"{nome}: {valori[nome]} {unita}".strip()
+                 for nome, unita in spec['values']]
+        messagebox.showinfo(f"Lettura {sensor_key}", "\n".join(righe))
+
+    def _collect_arduino_boards(self):
+        """
+        Ricostruisce la lista arduino.boards dai widget della card.
+
+        Le schede senza porta vengono scartate; per ogni scheda si tengono
+        solo i sensori spuntati, con i loro pin convertiti nel tipo giusto
+        (int per i pin digitali e l'indirizzo I2C, stringa per 'A0').
+        """
+        boards = []
+        for board_vars in getattr(self, 'arduino_board_vars', []):
+            porta = board_vars['port'].get().strip()
+            if not porta:
+                continue
+
+            sensors = {}
+            for key, sensore in board_vars['sensors'].items():
+                if not sensore['enabled'].get():
+                    continue
+                args = {}
+                for chiave, var in sensore['args'].items():
+                    grezzo = var.get().strip()
+                    if not grezzo:
+                        continue
+                    # 'A0' resta una stringa, '2' e '100' diventano numeri:
+                    # e' cosi' che li scrive a mano chi edita config.yaml.
+                    try:
+                        args[chiave] = int(grezzo)
+                    except ValueError:
+                        args[chiave] = grezzo
+                sensors[key] = args
+
+            boards.append({
+                'name': board_vars['name'].get().strip() or porta,
+                'port': porta,
+                'enabled': bool(board_vars['enabled'].get()),
+                'sensors': sensors,
+            })
+        return boards
+
     def save_config_changes(self):
         """Salva i cambiamenti della configurazione"""
         try:
@@ -1516,10 +1948,26 @@ class AeroGreenHouseGUI:
             self.config['ir_control']['T_max'] = float(self.ir_T_max_var.get())
             self.config['ir_control']['H_max'] = float(self.ir_H_max_var.get())
 
+            # Sezione schede Arduino
+            self.config.setdefault('arduino', {})
+            self.config['arduino']['baudrate'] = int(self.arduino_baudrate_var.get())
+            self.config['arduino']['timeout'] = int(self.arduino_timeout_var.get())
+            self.config['arduino']['boards'] = self._collect_arduino_boards()
+
+            # Sezione acqua (pH / EC)
+            self.config.setdefault('water', {})
+            self.config['water']['ph_read_interval'] = int(self.water_ph_interval_var.get())
+            self.config['water']['ec_read_interval'] = int(self.water_ec_interval_var.get())
+            self.config['water']['ph_min'] = float(self.water_ph_min_var.get())
+            self.config['water']['ph_max'] = float(self.water_ph_max_var.get())
+            self.config['water']['ec_min'] = float(self.water_ec_min_var.get())
+            self.config['water']['ec_max'] = float(self.water_ec_max_var.get())
+            self.config['water']['decimals'] = int(self.water_decimals_var.get())
+            self.config['water']['history_len'] = int(self.water_history_var.get())
+            self.config['water']['saving_dir'] = self.water_dir_var.get()
+
             # Sezione serbatoio (tank)
             self.config.setdefault('tank', {})
-            self.config['tank']['trig_pin'] = int(self.tank_trig_var.get())
-            self.config['tank']['echo_pin'] = int(self.tank_echo_var.get())
             self.config['tank']['tank_height_cm'] = float(self.tank_height_var.get())
             self.config['tank']['sensor_offset_cm'] = float(self.tank_offset_var.get())
             self.config['tank']['tank_area_cm2'] = float(self.tank_area_var.get())
@@ -1536,8 +1984,6 @@ class AeroGreenHouseGUI:
             # Sezione crescita (plant_growth)
             self.config.setdefault('plant_growth', {})
             self.config['plant_growth']['reference_height_cm'] = float(self.growth_ref_var.get())
-            self.config['plant_growth']['trig_pin'] = int(self.growth_trig_var.get())
-            self.config['plant_growth']['echo_pin'] = int(self.growth_echo_var.get())
             self.config['plant_growth']['read_interval_days'] = float(self.growth_interval_var.get())
             self.config['plant_growth']['n_samples'] = int(self.growth_nsamples_var.get())
             self.config['plant_growth']['decimals'] = int(self.growth_decimals_var.get())
@@ -1555,6 +2001,15 @@ class AeroGreenHouseGUI:
             self.config['Daily_Data']['plot_output_dir'] = self.daily_plot_dir_var.get()
 
             self.save_config()
+
+            # I manager lavorano sul dizionario di aeroHelper, che e' un altro
+            # oggetto: senza questo, porte e pin appena salvati resterebbero
+            # ignorati fino al riavvio del programma.
+            self.ah.configs['arduino'] = self.config['arduino']
+            self.ah.configs['water'] = self.config['water']
+            self.ah.configs['tank'] = self.config['tank']
+            self.ah.configs['plant_growth'] = self.config['plant_growth']
+            self.ah.arduino.reload()
         except ValueError:
             messagebox.showerror("Errore", "Inserire valori validi. Verificare i numeri.")
 
@@ -1576,9 +2031,25 @@ class AeroGreenHouseGUI:
         self.ir_T_max_var.set(str(self.config.get('ir_control', {}).get('T_max', 25.0)))
         self.ir_H_max_var.set(str(self.config.get('ir_control', {}).get('H_max', 65.0)))
 
+        a = self.config.get('arduino', {})
+        self.arduino_baudrate_var.set(str(a.get('baudrate', 9600)))
+        self.arduino_timeout_var.set(str(a.get('timeout', 15)))
+        # La card delle schede e' costruita dai dati: si ridisegna invece di
+        # aggiornare variabili che potrebbero non esistere piu'.
+        self._render_arduino_boards()
+
+        w = self.config.get('water', {})
+        self.water_ph_interval_var.set(str(w.get('ph_read_interval', 1800)))
+        self.water_ec_interval_var.set(str(w.get('ec_read_interval', 1800)))
+        self.water_ph_min_var.set(str(w.get('ph_min', 5.5)))
+        self.water_ph_max_var.set(str(w.get('ph_max', 6.5)))
+        self.water_ec_min_var.set(str(w.get('ec_min', 800)))
+        self.water_ec_max_var.set(str(w.get('ec_max', 2000)))
+        self.water_decimals_var.set(str(w.get('decimals', 2)))
+        self.water_history_var.set(str(w.get('history_len', 30)))
+        self.water_dir_var.set(w.get('saving_dir', '/home/fishnplants/Desktop/data/WATER/'))
+
         tank = self.config.get('tank', {})
-        self.tank_trig_var.set(str(tank.get('trig_pin', 23)))
-        self.tank_echo_var.set(str(tank.get('echo_pin', 24)))
         self.tank_height_var.set(str(tank.get('tank_height_cm', 30.0)))
         self.tank_offset_var.set(str(tank.get('sensor_offset_cm', 2.0)))
         self.tank_area_var.set(str(tank.get('tank_area_cm2', 900.0)))
@@ -1593,8 +2064,6 @@ class AeroGreenHouseGUI:
 
         g = self.config.get('plant_growth', {})
         self.growth_ref_var.set(str(g.get('reference_height_cm', 70.0)))
-        self.growth_trig_var.set(str(g.get('trig_pin', 5)))
-        self.growth_echo_var.set(str(g.get('echo_pin', 6)))
         self.growth_interval_var.set(str(g.get('read_interval_days', 1)))
         self.growth_nsamples_var.set(str(g.get('n_samples', 3)))
         self.growth_decimals_var.set(str(g.get('decimals', 1)))
@@ -2056,7 +2525,196 @@ class AeroGreenHouseGUI:
         self._chip(inner, "⚠  Sensore ancora da tarare — parametri nella schermata Configurazione",
                    self.COL_WARN, self.COL_WARN_BG).pack()
 
+        # Le altre due grandezze dell'acqua, lette dalle sonde Atlas collegate
+        # all'Arduino: stessa struttura della card del serbatoio.
+        self._build_ph_card(parent)
+        self._build_ec_card(parent)
+
         self._bind_mousewheel(parent, tank_canvas)
+
+    # ------------------------------------------------------------------
+    # Pagina H2O: card pH ed EC (wrapper sottili → WaterManager)
+    # ------------------------------------------------------------------
+    def _build_ph_card(self, parent):
+        """Card del pH, con i suoi comandi di avvio/arresto indipendenti."""
+        card = self._card(parent, "pH DELL'ACQUA")
+        card.pack(fill=tk.X, padx=10, pady=10)
+
+        btns = ttk.Frame(card)
+        btns.pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(btns, text="▶️ Attiva Lettura", style='Accent.TButton',
+                   command=self.start_ph_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="⏹️ Arresta Lettura", style='Stop.TButton',
+                   command=self.stop_ph_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="📊 Leggi Adesso",
+                   command=self.read_ph_now).pack(side=tk.LEFT, padx=5)
+
+        inner = ttk.Frame(card)
+        inner.pack(expand=True, fill=tk.X)
+
+        ttk.Label(inner, text="pH", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.ph_value_label = ttk.Label(inner, text="--", font=(self.FONT_MONO, 34),
+                                        foreground=self.COL_BLUE)
+        self.ph_value_label.pack()
+
+        self.ph_status_chip = self._chip(inner, "Nessuna misura", self.COL_FAINT, self.COL_DIV)
+        self.ph_status_chip.pack(pady=8)
+
+        self.ph_timestamp_label = ttk.Label(inner, text="Ultimo aggiornamento: --",
+                                            font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
+        self.ph_timestamp_label.pack(pady=(0, 8))
+
+        # Se c'e' gia' una misura salvata, la si mostra subito
+        if self.ah.water.last_ph:
+            self._update_ph_labels(self.ah.water.last_ph)
+
+    def _build_ec_card(self, parent):
+        """
+        Card della conducibilita' elettrica.
+
+        Il circuito EZO-EC restituisce EC, TDS e salinita' in un'unica
+        risposta, quindi la card li mostra tutti e tre insieme, ciascuno con
+        la propria unita' di misura: sono tre facce della stessa lettura, non
+        tre misure separate.
+        """
+        card = self._card(parent, "CONDUCIBILITÀ ELETTRICA DELL'ACQUA")
+        card.pack(fill=tk.X, padx=10, pady=10)
+
+        btns = ttk.Frame(card)
+        btns.pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(btns, text="▶️ Attiva Lettura", style='Accent.TButton',
+                   command=self.start_ec_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="⏹️ Arresta Lettura", style='Stop.TButton',
+                   command=self.stop_ec_reading).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="📊 Leggi Adesso",
+                   command=self.read_ec_now).pack(side=tk.LEFT, padx=5)
+
+        inner = ttk.Frame(card)
+        inner.pack(expand=True, fill=tk.X)
+
+        ttk.Label(inner, text="CONDUCIBILITÀ", font=(self.FONT_UI, 9, 'bold'),
+                  foreground=self.COL_FAINT).pack()
+        self.ec_value_label = ttk.Label(inner, text="-- µS/cm", font=(self.FONT_MONO, 34),
+                                        foreground=self.COL_BLUE)
+        self.ec_value_label.pack()
+
+        self.ec_status_chip = self._chip(inner, "Nessuna misura", self.COL_FAINT, self.COL_DIV)
+        self.ec_status_chip.pack(pady=8)
+
+        sec = ttk.Frame(inner)
+        sec.pack(pady=6)
+        ttk.Label(sec, text="Solidi disciolti (TDS):",
+                  font=(self.FONT_UI, 12)).grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.tds_value_label = ttk.Label(sec, text="-- ppm", font=(self.FONT_UI, 12, 'bold'))
+        self.tds_value_label.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+        ttk.Label(sec, text="Salinità:",
+                  font=(self.FONT_UI, 12)).grid(row=0, column=2, sticky=tk.W, padx=15)
+        self.sal_value_label = ttk.Label(sec, text="-- PSU", font=(self.FONT_UI, 12, 'bold'))
+        self.sal_value_label.grid(row=0, column=3, sticky=tk.W, padx=5)
+
+        self.ec_timestamp_label = ttk.Label(inner, text="Ultimo aggiornamento: --",
+                                            font=(self.FONT_UI, 10), foreground=self.COL_FAINT)
+        self.ec_timestamp_label.pack(pady=(8, 0))
+
+        if self.ah.water.last_ec:
+            self._update_ec_labels(self.ah.water.last_ec)
+
+    def _water_params(self):
+        """Soglie di allarme di pH ed EC, lette dalla configurazione."""
+        w = self.config.get('water', {}) or {}
+        return dict(ph_min=w.get('ph_min', 5.5), ph_max=w.get('ph_max', 6.5),
+                    ec_min=w.get('ec_min', 800), ec_max=w.get('ec_max', 2000))
+
+    def _range_chip(self, chip, valore, minimo, massimo, unita=''):
+        """Colora una pill di stato secondo che il valore sia o meno in range."""
+        suffisso = f" {unita}" if unita else ''
+        if minimo <= valore <= massimo:
+            chip.config(text=f"Nel range {minimo}–{massimo}{suffisso}",
+                        fg=self.COL_OK, bg=self.COL_SOFT)
+        else:
+            chip.config(text=f"Fuori dal range {minimo}–{massimo}{suffisso}",
+                        fg=self.COL_WARN, bg=self.COL_WARN_BG)
+
+    def _update_ph_labels(self, result):
+        """Aggiorna le label del pH (chiamata via root.after dal thread di lettura)."""
+        p = self._water_params()
+        self.ph_value_label.config(text=f"{result['ph']:.2f}")
+        self._range_chip(self.ph_status_chip, result['ph'], p['ph_min'], p['ph_max'])
+        self.ph_timestamp_label.config(text=f"Ultimo aggiornamento: {result['timestamp']}")
+
+    def _update_ec_labels(self, result):
+        """Aggiorna le label di EC/TDS/salinità (tutte da un'unica lettura)."""
+        p = self._water_params()
+        self.ec_value_label.config(text=f"{result['ec_us_cm']:.1f} µS/cm")
+        self._range_chip(self.ec_status_chip, result['ec_us_cm'],
+                         p['ec_min'], p['ec_max'], 'µS/cm')
+        self.tds_value_label.config(text=f"{result['tds_ppm']:.1f} ppm")
+        self.sal_value_label.config(text=f"{result['salinity_psu']:.2f} PSU")
+        self.ec_timestamp_label.config(text=f"Ultimo aggiornamento: {result['timestamp']}")
+
+    def start_ph_reading(self):
+        """Avvia la lettura temporizzata del pH (WaterManager)."""
+        def on_update(result):
+            self.root.after(0, lambda r=result: self._update_ph_labels(r))
+
+        if not self.ah.water.start_ph_reading(on_update=on_update):
+            messagebox.showwarning("Avviso", "Lettura pH già in corso!")
+
+    def stop_ph_reading(self):
+        """Arresta immediatamente la lettura del pH."""
+        if not self.ah.water.stop_ph_reading():
+            messagebox.showwarning("Avviso", "Nessuna lettura pH in corso")
+            return
+        messagebox.showinfo("Successo", "Lettura pH arrestata!")
+
+    def read_ph_now(self):
+        """Legge immediatamente il pH (WaterManager)."""
+        try:
+            result = self.ah.water.read_ph_now()
+            if result is None:
+                messagebox.showwarning(
+                    "Avviso", "Non è stato possibile leggere il sensore di pH.\n"
+                              "Il motivo è indicato nella sezione Errori della schermata Log.")
+                return
+            self._update_ph_labels(result)
+            messagebox.showinfo("Successo", f"pH: {result['ph']:.2f}")
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella lettura del pH: {e}")
+
+    def start_ec_reading(self):
+        """Avvia la lettura temporizzata dell'EC (WaterManager)."""
+        def on_update(result):
+            self.root.after(0, lambda r=result: self._update_ec_labels(r))
+
+        if not self.ah.water.start_ec_reading(on_update=on_update):
+            messagebox.showwarning("Avviso", "Lettura EC già in corso!")
+
+    def stop_ec_reading(self):
+        """Arresta immediatamente la lettura dell'EC."""
+        if not self.ah.water.stop_ec_reading():
+            messagebox.showwarning("Avviso", "Nessuna lettura EC in corso")
+            return
+        messagebox.showinfo("Successo", "Lettura EC arrestata!")
+
+    def read_ec_now(self):
+        """Legge immediatamente EC, TDS e salinità (WaterManager)."""
+        try:
+            result = self.ah.water.read_ec_now()
+            if result is None:
+                messagebox.showwarning(
+                    "Avviso", "Non è stato possibile leggere il sensore di conducibilità.\n"
+                              "Il motivo è indicato nella sezione Errori della schermata Log.")
+                return
+            self._update_ec_labels(result)
+            messagebox.showinfo(
+                "Successo",
+                f"Conducibilità: {result['ec_us_cm']:.1f} µS/cm\n"
+                f"TDS: {result['tds_ppm']:.1f} ppm\n"
+                f"Salinità: {result['salinity_psu']:.2f} PSU")
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nella lettura dell'EC: {e}")
 
     def _update_tank_labels(self, result):
         """Aggiorna le label del serbatoio (chiamata via root.after dal thread di lettura)."""

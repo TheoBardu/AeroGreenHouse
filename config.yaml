@@ -31,8 +31,6 @@ spectro:
   saving_dir: /home/fishnplants/Desktop/data/SPECTRO/
   history_len: 10
 plant_growth:
-  trig_pin: 5
-  echo_pin: 6
   read_interval_days: 1
   n_samples: 3
   reference_height_cm: 70.0
@@ -45,6 +43,9 @@ camera:
   saving_dir: /home/fishnplants/Desktop/data/IMG/
 Daily_Data:
   th_data_dir: /home/fishnplants/Desktop/data/TH/
+  water_data_dir: /home/fishnplants/Desktop/data/WATER/
+  tank_data_dir: /home/fishnplants/Desktop/data/TANK/
+  growth_data_dir: /home/fishnplants/Desktop/data/GROWTH/
   plot_output_dir: /home/fishnplants/Desktop/data/PLOT/
 ir_control:
   rx_pin: 20
@@ -56,3 +57,50 @@ ir_control:
   control_time: 5.0
   T_max: 26.0
   H_max: 65.5
+
+# Schede Arduino collegate via USB.
+# Ogni scheda dichiara SU QUALI PIN sono attaccate le sue sonde: sono questi
+# valori a finire dentro il comando seriale (es. read_us,2,3), quindi cambiare
+# cablaggio non richiede di ricompilare lo sketch Arduino.
+# Sensori riconosciuti: pH, EC, US_water, US_plant.
+arduino:
+  baudrate: 9600
+  timeout: 15
+  reset_delay: 2
+  boards:
+  - name: Board1
+    port: /dev/ttyACM0
+    enabled: true
+    sensors:
+      pH:
+        pin: A0
+      EC:
+        address: 100
+      US_water:
+        trig: 2
+        echo: 3
+      US_plant:
+        trig: 4
+        echo: 5
+water:
+  ph_read_interval: 1800
+  ec_read_interval: 1800
+  ph_min: 5.5
+  ph_max: 6.5
+  ec_min: 800
+  ec_max: 2000
+  decimals: 2
+  save: true
+  saving_dir: /home/fishnplants/Desktop/data/WATER/
+  history_len: 30
+tank:
+  tank_height_cm: 30.0
+  sensor_offset_cm: 2.0
+  tank_area_cm2: 900.0
+  water_low_threshold_l: 3.0
+  read_interval: 900
+  n_samples: 5
+  saving_dir: /home/fishnplants/Desktop/data/TANK/
+error_log:
+  saving_dir: /home/fishnplants/Desktop/data/ERRORS/
+  history_len: 200

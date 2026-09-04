@@ -2,10 +2,13 @@
 # FnP AeroGreenHouse - TEST: Raspberry Pi <-> Arduino via seriale USB
 # ============================================================
 # Cosa fa questo script (volutamente semplice, nessuna classe/funzione custom):
-#   Apre la porta seriale USB verso l'Arduino Uno, gli manda il COMANDO
-#   TESTUALE "read_water_level" (terminato da newline, come si aspetta lo
-#   sketch fish_n_plant_reading_module.ino), aspetta la risposta nel
-#   formato "<comando>:<valore>" e la stampa a schermo.
+#   Apre la porta seriale USB verso l'Arduino Uno, gli manda uno dei COMANDI
+#   TESTUALI dello sketch fish_n_plant_reading_module_atlas.ino (terminato da
+#   newline, come lo sketch si aspetta), aspetta la risposta nel formato
+#   "<comando>:<valore>" e la stampa a schermo.
+#
+#   I comandi portano con se' i pin da usare (es. "read_us,2,3"), quindi da
+#   qui si puo' provare qualunque cablaggio senza ricompilare l'Arduino.
 #
 # Requisiti:
 #   pip install pyserial
@@ -50,9 +53,20 @@ time.sleep(2)
 arduino.reset_input_buffer()
 
 # print(f"Connesso ad Arduino su {PORTA} a {BAUDRATE} baud. Premi Ctrl+C per uscire.")
-cmds = {0: "quit", 1:"read_water_level\n", 2: "read_pH\n" }
-# Comando testuale riconosciuto dallo sketch Arduino per la lettura
-# dell'HC-SR04 (vedi tabella COMMANDS nello sketch .ino).
+# Comandi testuali riconosciuti dallo sketch Arduino (vedi tabella COMMANDS
+# nel .ino). I pin viaggiano DENTRO il comando, separati da virgola: cosi'
+# per provare un sensore su altri pin basta cambiare questi numeri, senza
+# ricompilare la scheda.
+#   read_pH,<pin>          pin analogico del Surveyor
+#   read_EC,<indirizzo>    indirizzo I2C del circuito EZO-EC
+#   read_us,<trig>,<echo>  coppia di pin dell'HC-SR04
+cmds = {
+    0: "quit",
+    1: "read_us,2,3\n",     # livello del serbatoio
+    2: "read_us,4,5\n",     # altezza delle piante
+    3: "read_pH,A0\n",
+    4: "read_EC,100\n",
+}
 
 try:
     while True:

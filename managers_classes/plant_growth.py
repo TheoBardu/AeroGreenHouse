@@ -1,7 +1,9 @@
 import os
 import threading
 from datetime import datetime
+from statistics import mean
 
+from managers_classes.arduino_link import ArduinoError
 from managers_classes.data_config import round_decimals, DEFAULT_DECIMALS
 
 
@@ -9,8 +11,6 @@ from managers_classes.data_config import round_decimals, DEFAULT_DECIMALS
 # Default (usati se la sezione 'plant_growth' di config.yaml e' incompleta)
 # =====================================================================
 
-GPIO_TRIG = 5      # pin TRIG (BCM) del sensore di crescita
-GPIO_ECHO = 6      # pin ECHO (BCM) del sensore di crescita
 READ_INTERVAL_DAYS = 1     # ogni quanti giorni misurare
 N_SAMPLES = 3              # misure da mediare ad ogni campionamento
 REFERENCE_HEIGHT_CM = 70.0  # distanza sensore -> camera radicale a pianta assente
@@ -121,9 +121,12 @@ def save_reference_height(value_cm: float, config_file: str = None) -> None:
 class PlantGrowthManager():
     '''
     Class per la misura dell'altezza delle piante tramite un sensore
-    ultrasonico HC-SR04 posto sopra la camera radicale. Riusa la logica di
-    misura definita in sensors/ultrasonic_sensor/ultrasonic_measurement.py
-    (nessuna riscrittura della fisica).
+    ultrasonico HC-SR04 posto sopra la camera radicale.
+
+    Il sensore NON e' piu' collegato ai GPIO del Raspberry: e' attaccato a un
+    Arduino UNO, che lo legge su richiesta e restituisce la distanza via
+    seriale USB (vedi managers_classes/arduino_link.py). Il Raspberry
+    conserva la logica di controllo temporizzato e il calcolo dell'altezza.
 
     L'altezza della pianta e' la differenza tra la distanza di riferimento
     (sensore -> camera radicale, misurata a pianta assente) e la distanza
@@ -137,32 +140,29 @@ class PlantGrowthManager():
     I parametri sono letti dalla sezione 'plant_growth' di config.yaml.
     '''
 
-    def __init__(self, configs, logger):
+    def __init__(self, configs, logger, arduino, errors):
         '''
         :param configs: dizionario di configurazione (config.yaml)
         :param logger:  logger condiviso
+        :param arduino: ArduinoHub condiviso (managers_classes/arduino_link.py)
+        :param errors:  ErrorRecorder condiviso (managers_classes/error_log.py)
         '''
         self.configs = configs
         self.logger = logger
+        self._arduino = arduino
+        self._errors = errors
 
         self.last_result = None
         self._thread = None
         self._stop_event = threading.Event()
-        self._gpio_ready = False
-
-        # Riuso del modulo standalone (resta eseguibile da solo)
-        from sensors.ultrasonic_sensor import ultrasonic_measurement as growth_mod
-        self._growth = growth_mod
 
         # Storico gia' salvato su file (serve a grafico e tabella della GUI)
         self.history = self.load_history()
 
     def _params(self):
         '''Legge i parametri dalla sezione 'plant_growth' di config.yaml con fallback ai default del modulo.'''
-        g = self.configs.get('plant_growth', {})
+        g = self.configs.get('plant_growth', {}) or {}
         return dict(
-            trig=g.get('trig_pin', GPIO_TRIG),
-            echo=g.get('echo_pin', GPIO_ECHO),
             interval_days=g.get('read_interval_days', READ_INTERVAL_DAYS),
             n=g.get('n_samples', N_SAMPLES),
             reference=g.get('reference_height_cm', REFERENCE_HEIGHT_CM),
@@ -181,36 +181,48 @@ class PlantGrowthManager():
             self.logger.error(f"GROWTH: errore nella lettura dello storico: {e}")
             return []
 
-    def _ensure_gpio(self, trig, echo):
-        '''Inizializza i pin del sensore una sola volta.'''
-        if not self._gpio_ready:
-            self._growth.initialize_gpio(trig, echo)
-            self._gpio_ready = True
-            self.logger.info(f"GROWTH: GPIO inizializzati TRIG=GPIO{trig}, ECHO=GPIO{echo}")
-
     def _measure_mean_distance(self, p):
         '''
-        Media di n_samples letture del sensore, con validazione.
+        Media di n_samples letture chieste all'Arduino, con validazione.
 
         Unica definizione di "misura valida": la usano sia read_now() sia
         calibration_distance().
 
+        A ripetere le letture e' il Raspberry: allo sketch Arduino si chiede
+        una misura alla volta, cosi' la politica di campionamento resta
+        configurabile da config.yaml senza ricompilare la scheda.
+
         :param p: parametri correnti (da _params())
         :return:  distanza in cm, oppure None se la misura non e' valida.
         '''
-        self._ensure_gpio(p['trig'], p['echo'])
+        letture = []
+        ultimo_errore = None
 
-        dist = self._growth.measure_distance_mean(p['trig'], p['echo'], n_samples=p['n'])
+        for _ in range(max(1, int(p['n']))):
+            try:
+                letture.append(self._arduino.read_float('US_plant'))
+            except ArduinoError as e:
+                ultimo_errore = e
 
-        if dist < 0:
-            self.logger.warning("GROWTH: Misura non valida (timeout o fuori range). "
-                                "Verificare il posizionamento del sensore.")
+        if not letture:
+            self._errors.record(
+                'US_plant',
+                "Non è stato possibile leggere il sensore ultrasonico della crescita, "
+                f"controlla il motivo: "
+                f"{ultimo_errore.message if ultimo_errore else 'nessuna lettura valida'}"
+            )
             return None
+
+        dist = mean(letture)
 
         # Range fisico del sensore (2-400 cm per HC-SR04)
         if dist < 2.0 or dist > 400.0:
-            self.logger.warning(f"GROWTH: Distanza {dist:.1f}cm fuori dal range "
-                                "operativo del sensore (2-400cm). Misura ignorata.")
+            self._errors.record(
+                'US_plant',
+                f"Non è stato possibile leggere il sensore ultrasonico della crescita, "
+                f"controlla il motivo: distanza {dist:.1f}cm fuori dal range operativo "
+                f"(2-400cm). Misura ignorata."
+            )
             return None
 
         return dist
@@ -339,6 +351,6 @@ class PlantGrowthManager():
                 self.logger.error(f"Errore misura GROWTH: {str(e)}")
 
             # Attendi l'intervallo (interrompibile)
-            self._stop_event.wait(p['interval_days'] * SECONDS_PER_DAY)
+            self._stop_event.wait(self._params()['interval_days'] * SECONDS_PER_DAY)
 
         self.logger.info("Misura GROWTH interrotta")

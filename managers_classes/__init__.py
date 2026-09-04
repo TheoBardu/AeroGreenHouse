@@ -1,6 +1,11 @@
+from managers_classes.arduino_link import ArduinoHub, ArduinoError
+from managers_classes.error_log import ErrorRecorder
 from managers_classes.jobs_manager import JobsManager
 from managers_classes.ambient_manager import AmbientManager
 from managers_classes.climate_manager import ClimateManager
 from managers_classes.tank_manager import TankManager
+from managers_classes.water_manager import WaterManager
 from managers_classes.spectro_manager import SpectroManager
 from managers_classes.plant_growth import PlantGrowthManager
+from managers_classes.camera_manager import CameraManager
+from managers_classes.daily_th_processor import DailyTHManager

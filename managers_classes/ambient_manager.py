@@ -1,6 +1,9 @@
 import glob
+import json
 import os
 import re
+import subprocess
+import sys
 import threading
 from time import sleep
 
@@ -101,6 +104,13 @@ class AmbientManager():
         self._thread = None
         self._stop_event = threading.Event()
 
+        # Funzione, impostata da aeroHelper dopo aver creato tutti i manager,
+        # che restituisce gli ultimi valori noti delle altre grandezze (acqua,
+        # serbatoio, crescita) e gli errori recenti, da allegare all'upload.
+        # Resta None se il manager e' usato da solo: in quel caso si carica
+        # solo T/H/VPD, esattamente come prima.
+        self.extra_data_provider = None
+
     def load_last_reading(self):
         '''Rilegge da file l'ultima misura ambientale salvata (None se non c'e').'''
         save_dir = self.configs.get('dht22', {}).get('saving_dir',
@@ -157,11 +167,54 @@ class AmbientManager():
     ###########################################
     # Uploading data on website
     ###########################################
+    # Grandezze allegabili all'upload: (chiave restituita dal provider, flag).
+    UPLOAD_EXTRA_FLAGS = (
+        ('ph', '-ph'),
+        ('ec_us_cm', '-ec'),
+        ('tds_ppm', '-tds'),
+        ('salinity_psu', '-sal'),
+        ('water_level_cm', '-lvl'),
+        ('volume_L', '-vol'),
+        ('fill_percent', '-fill'),
+        ('h_plant_cm', '-hp'),
+    )
+
     def upload_data_on_web(self, T, H, vpd, timestamp):
         '''
-        This module upload the data on website calling the local uploader.py module
+        Carica sul sito l'ultima lettura, chiamando il modulo uploader.py.
+
+        Oltre a T/H/VPD allega, se disponibili, gli ultimi valori noti delle
+        altre grandezze (pH, EC, serbatoio, altezza piante) e gli errori di
+        lettura recenti: il sito mostra una fotografia unica dello stato della
+        serra, e non ha senso fare un upload separato per ogni sonda.
+
+        Si usa subprocess con una lista di argomenti e non os.system: gli
+        errori sono una stringa JSON con virgolette e accenti, che passando
+        dalla shell verrebbe interpretata e spezzata.
         '''
-        os.system(f'python uploader/uploader.py data -t {T} -hu {H} -vpd {vpd} -ts "{timestamp}"')
+        cmd = [sys.executable, 'uploader/uploader.py', 'data',
+               '-t', str(T), '-hu', str(H), '-vpd', str(vpd), '-ts', str(timestamp)]
+
+        extra = {}
+        if self.extra_data_provider is not None:
+            try:
+                extra = self.extra_data_provider() or {}
+            except Exception as e:
+                self.logger.warning(f"AMBIENT: dati aggiuntivi non disponibili per "
+                                    f"l'upload: {e}")
+
+        for chiave, flag in self.UPLOAD_EXTRA_FLAGS:
+            valore = extra.get(chiave)
+            if valore is not None:
+                cmd += [flag, str(valore)]
+
+        errori = extra.get('errors')
+        if errori:
+            cmd += ['-err', json.dumps(errori, ensure_ascii=False)]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            self.logger.error(f"AMBIENT: upload dati fallito: {result.stderr.strip()}")
 
     ###########################################
     # Lettura periodica (spostata da gui.py)
