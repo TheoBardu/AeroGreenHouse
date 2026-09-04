@@ -381,6 +381,18 @@ STATO_LIMITE = "limite"
 STATO_SANA = "sana"
 STATO_MOLTO_SANA = "molto_sana"
 
+# Soglie di classificazione, in ordine crescente: (limite superiore, stato).
+# Un valore appartiene al primo stato la cui soglia non e' ancora superata;
+# oltre l'ultima soglia c'e' STATO_MOLTO_SANA.
+# Stanno qui, e non nella GUI, perche' sono conoscenza agronomica e non
+# presentazione: la GUI le rilegge per disegnare le fasce colorate
+# dell'indicatore, cosi' colori e classificazione non possono divergere.
+SOGLIE_MCARI2 = (
+    (0.4, STATO_STRESS),
+    (0.6, STATO_LIMITE),
+    (0.9, STATO_SANA),
+)
+
 TESTI_MCARI2 = {
     STATO_STRESS: "Possibile stress idrico o carenza nutrizionale (es. azoto)",
     STATO_LIMITE: "Coltura al limite, tenere sotto osservazione",
@@ -399,14 +411,18 @@ def classifica_mcari2(valore):
     Returns:
         Una delle chiavi STATO_* (stress / limite / sana / molto_sana).
     """
-    if valore < 0.4:
-        return STATO_STRESS
-    elif valore < 0.6:
-        return STATO_LIMITE
-    elif valore <= 0.9:
-        return STATO_SANA
-    else:
-        return STATO_MOLTO_SANA
+    # L'ultima soglia e' inclusiva (0.9 e' ancora "sana"), le precedenti no:
+    # e' il comportamento storico di questa funzione, mantenuto tale e quale
+    # perche' le misure gia' archiviate sono state classificate cosi'.
+    *intermedie, (ultimo_limite, ultimo_stato) = SOGLIE_MCARI2
+
+    for limite, stato in intermedie:
+        if valore < limite:
+            return stato
+
+    if valore <= ultimo_limite:
+        return ultimo_stato
+    return STATO_MOLTO_SANA
 
 
 def interpreta_mcari2(valore):

@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import font as tkfont
+import math
 import yaml
 import os
 import sys
@@ -237,13 +238,25 @@ class AeroGreenHouseGUI:
         self.FONT_MONO = self._pick_font(
             ('IBM Plex Mono', 'DejaVu Sans Mono', 'Menlo'), 'Courier')
 
+        # Fondo scala degli indicatori di temperatura e VPD nel Riepilogo.
+        # NON sono soglie di allarme: servono solo a dare all'arco un'escursione
+        # plausibile, dato che per queste grandezze la configurazione non
+        # definisce un intervallo ottimale. Umidita' (0-100 %), riempimento
+        # (0-100 %) e MCARI2 (0-1) hanno gia' un fondo scala naturale.
+        self.SCALA_T_MAX = 40.0    # °C
+        self.SCALA_VPD_MAX = 3.0   # kPa
+
         # Colore dello stato della pianta. Le chiavi sono quelle di
         # classifica_mcari2: le soglie numeriche restano nel modulo del sensore.
+        # COL_OK e COL_HEADER sono lo stesso verde: usarli entrambi qui
+        # renderebbe "sana" e "molto sana" indistinguibili nelle fasce
+        # dell'indicatore. Per le due fasce buone si usa quindi il verde
+        # chiaro per "sana" e quello scuro per "molto sana".
         self.MCARI2_COLORS = {
             spectro.STATO_STRESS: self.COL_BAD,
             spectro.STATO_LIMITE: self.COL_WARN,
-            spectro.STATO_SANA: self.COL_OK,
-            spectro.STATO_MOLTO_SANA: self.COL_HEADER,
+            spectro.STATO_SANA: self.COL_ACCENT,
+            spectro.STATO_MOLTO_SANA: self.COL_OK,
         }
 
         # Sfondo tenue della pill di stato, abbinato a MCARI2_COLORS
@@ -918,24 +931,36 @@ class AeroGreenHouseGUI:
             grid.columnconfigure(c, weight=1, uniform='riep')
         # minsize: dentro l'area scrollabile le righe hanno solo l'altezza che
         # chiedono, quindi i pesi da soli lascerebbero i blocchi schiacciati.
-        grid.rowconfigure(0, weight=3, minsize=270)
-        grid.rowconfigure(1, weight=2, minsize=190)
+        grid.rowconfigure(0, weight=3, minsize=250)
+        grid.rowconfigure(1, weight=3, minsize=250)
+        grid.rowconfigure(2, weight=3, minsize=250)
+        grid.rowconfigure(3, weight=2, minsize=190)
 
-        # --- Riga 0: i tre sensori con un fondo scala naturale ---
-        self.riep_amb_gauge, self.riep_amb_labels, self.riep_amb_date = self._build_riep_card(
-            grid, 0, 0, "Ambiente", ("Temperatura", "VPD"))
+        # --- Riga 0: l'aria, tre grandezze da un'unica lettura del DHT22 ---
+        blocco = self._build_riep_gauges_card(
+            grid, 0, 0, 3, "Ambiente",
+            (("TEMPERATURA", 'temp'), ("UMIDITÀ", 'hum'), ("VPD", 'vpd')))
+        self.riep_amb_gauges = blocco['canvas']
+        self.riep_amb_date = blocco['data']
 
-        # Il blocco H2O riassume tutta l'acqua: quanta ce n'e' (arco sul
-        # riempimento) e com'e' fatta (pH ed EC dalle sonde su Arduino).
+        # --- Riga 1: com'e' fatta l'acqua (pH ed EC) e quanta ce n'e' ---
+        blocco = self._build_riep_gauges_card(
+            grid, 1, 0, 2, "H2O", (("pH", 'ph'), ("CONDUCIBILITÀ", 'ec')),
+            data_per_colonna=True)
+        self.riep_ph_gauge = blocco['canvas']['ph']
+        self.riep_ec_gauge = blocco['canvas']['ec']
+        self.riep_ph_date = blocco['data']['ph']
+        self.riep_ec_date = blocco['data']['ec']
+
         self.riep_tank_gauge, self.riep_tank_labels, self.riep_tank_date = self._build_riep_card(
-            grid, 0, 1, "H2O", ("Volume", "pH", "EC"))
+            grid, 1, 2, "Serbatoio", ("Volume",))
 
+        # --- Riga 2: salute della coltura e crescita ---
         self.riep_mcari_gauge, self.riep_mcari_labels, self.riep_mcari_date = self._build_riep_card(
-            grid, 0, 2, "Indice MCARI2", ("Stato",))
+            grid, 2, 0, "Indice MCARI2", ("Stato",))
 
-        # --- Riga 1: crescita (numero grande) e processi attivi ---
         growth_card = self._card(grid, "Crescita")
-        growth_card.grid(row=1, column=0, sticky=tk.NSEW, padx=5, pady=5)
+        growth_card.grid(row=2, column=1, sticky=tk.NSEW, padx=5, pady=5)
         inner = ttk.Frame(growth_card)
         inner.pack(expand=True)
         ttk.Label(inner, text="ALTEZZA PIANTA", font=(self.FONT_UI, 9, 'bold'),
@@ -947,8 +972,9 @@ class AeroGreenHouseGUI:
                                           foreground=self.COL_FAINT)
         self.riep_growth_date.pack(pady=(4, 0))
 
+        # --- Riga 3: processi attivi, a tutta larghezza ---
         proc_card = self._card(grid, "Processi Attivi")
-        proc_card.grid(row=1, column=1, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
+        proc_card.grid(row=3, column=0, columnspan=3, sticky=tk.NSEW, padx=5, pady=5)
         self.riep_proc_frame = ttk.Frame(proc_card)
         self.riep_proc_frame.pack(fill=tk.BOTH, expand=True)
         # Il ciclo di aggiornamento parte da __init__, con gli altri poller.
@@ -965,7 +991,7 @@ class AeroGreenHouseGUI:
         card = self._card(grid, titolo)
         card.grid(row=row, column=col, sticky=tk.NSEW, padx=5, pady=5)
 
-        canvas = tk.Canvas(card, height=110, highlightthickness=0, bg=self.COL_CARD)
+        canvas = tk.Canvas(card, height=150, highlightthickness=0, bg=self.COL_CARD)
         canvas.pack(fill=tk.X)
         canvas.bind('<Configure>', lambda e: self.refresh_riepilogo_tab(force=True))
 
@@ -983,17 +1009,146 @@ class AeroGreenHouseGUI:
         data.pack(pady=(6, 0))
         return canvas, labels, data
 
-    def _draw_arc_gauge(self, canvas, value, vmin, vmax, color, testo, unita=""):
+    def _build_riep_gauges_card(self, grid, row, col, colspan, titolo, colonne,
+                                data_per_colonna=False):
         """
-        Disegna un indicatore ad arco semicircolare sul Canvas.
+        Card del Riepilogo con piu' indicatori affiancati (Ambiente, H2O).
 
-        Come per il grafico della crescita, si usano le primitive native di Tk:
-        su un Pi Zero W matplotlib costerebbe secondi di import e decine di MB
-        di RAM per disegnare mezza ciambella.
+        Ha un costruttore proprio invece di riusare _build_riep_card perche'
+        quello fa un solo arco per card, e qui le grandezze da leggere ciascuna
+        sulla propria scala sono due o tre.
 
-        :param value: valore da rappresentare (None -> arco vuoto)
+        :param colonne: sequenza di (titolo visibile, chiave)
+        :param data_per_colonna: dove mettere la data della misura.
+            H2O la vuole per colonna (True): pH ed EC sono job separati, con
+            intervalli propri, e una data sola mentirebbe su una delle due.
+            Ambiente no (False): le sue tre grandezze escono tutte dalla stessa
+            lettura del DHT22.
+        :return: dict con 'canvas' ({chiave: Canvas}) e 'data' (una sola label,
+                 oppure {chiave: label} se data_per_colonna)
+        """
+        card = self._card(grid, titolo)
+        card.grid(row=row, column=col, columnspan=colspan,
+                  sticky=tk.NSEW, padx=5, pady=5)
+
+        inner = tk.Frame(card, bg=self.COL_CARD)
+        inner.pack(fill=tk.BOTH, expand=True)
+        for i in range(len(colonne)):
+            inner.columnconfigure(i, weight=1, uniform='gauges')
+
+        canvas_per_chiave = {}
+        date_per_chiave = {}
+        for i, (titolo_colonna, chiave) in enumerate(colonne):
+            colonna = tk.Frame(inner, bg=self.COL_CARD)
+            colonna.grid(row=0, column=i, sticky=tk.NSEW, padx=6)
+
+            tk.Label(colonna, text=titolo_colonna, bg=self.COL_CARD, fg=self.COL_FAINT,
+                     font=(self.FONT_UI, 9, 'bold')).pack()
+
+            canvas = tk.Canvas(colonna, height=150, highlightthickness=0, bg=self.COL_CARD)
+            canvas.pack(fill=tk.X)
+            # Senza questo l'arco resterebbe vuoto al primo disegno: alla
+            # costruzione il Canvas non ha ancora una dimensione.
+            canvas.bind('<Configure>', lambda e: self.refresh_riepilogo_tab(force=True))
+            canvas_per_chiave[chiave] = canvas
+
+            if data_per_colonna:
+                data = ttk.Label(colonna, text="Nessuna misura", font=(self.FONT_UI, 9),
+                                 foreground=self.COL_FAINT)
+                data.pack(pady=(4, 0))
+                date_per_chiave[chiave] = data
+
+        if data_per_colonna:
+            return {'canvas': canvas_per_chiave, 'data': date_per_chiave}
+
+        data = ttk.Label(card, text="Nessuna misura", font=(self.FONT_UI, 9),
+                         foreground=self.COL_FAINT)
+        data.pack(pady=(6, 0))
+        return {'canvas': canvas_per_chiave, 'data': data}
+
+    def _bande_soglia(self, vmin, vmax, band_min, band_max):
+        """Fasce di un indicatore dentro/fuori: rosso, verde in mezzo, rosso."""
+        return [(vmin, band_min, self.COL_BAD),
+                (band_min, band_max, self.COL_OK),
+                (band_max, vmax, self.COL_BAD)]
+
+    def _bande_mcari2(self):
+        """
+        Fasce dell'indicatore MCARI2, dalle soglie del modulo spettrometro.
+
+        :return: lista di (da, a, colore) che copre l'intervallo 0-1
+        """
+        bande = []
+        da = 0.0
+        for limite, stato in spectro.SOGLIE_MCARI2:
+            bande.append((da, limite, self.MCARI2_COLORS.get(stato, self.COL_FAINT)))
+            da = limite
+        bande.append((da, 1.0, self.MCARI2_COLORS.get(spectro.STATO_MOLTO_SANA,
+                                                      self.COL_FAINT)))
+        return bande
+
+    def _gauge_angle(self, value, vmin, vmax):
+        """
+        Angolo in gradi (convenzione Tk: 180 a sinistra, 0 a destra) del valore
+        sul semicerchio.
+
+        Vive fuori dalle funzioni di disegno perche' la usano sia gli archi sia
+        la lancetta: se ognuno rifacesse il conto, basterebbe una svista per
+        farli puntare a due posti diversi.
+        """
+        if vmax <= vmin:
+            return 180.0
+        frazione = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
+        return 180.0 - 180.0 * frazione
+
+    def _gauge_scale(self, vmin_ok, vmax_ok):
+        """
+        Fondo scala di un indicatore a banda, dedotto dalle soglie di allarme.
+
+        Si allarga di un'ampiezza di banda per lato, cosi' la fascia buona
+        occupa il terzo centrale dell'arco: con la scala fisica completa
+        (pH 0-14) sarebbe uno spicchio illeggibile.
+
+        Il minimo e' troncato a zero perche' per l'EC verrebbe negativo
+        (800 - 1200), e una conducibilita' sotto zero non esiste.
+
+        :return: (vmin, vmax) del fondo scala
+        """
+        ampiezza = vmax_ok - vmin_ok
+        return max(0.0, vmin_ok - ampiezza), vmax_ok + ampiezza
+
+    def _band_color(self, value, bande):
+        """Colore della fascia in cui cade il valore (l'ultima, se lo supera)."""
+        for da, a, colore in bande:
+            if da <= value <= a:
+                return colore
+        return bande[-1][2] if bande else self.COL_FAINT
+
+    def _draw_gauge(self, canvas, value, vmin, vmax, testo, unita="",
+                    colore=None, bande=None, nota=None):
+        """
+        Disegna un indicatore semicircolare con la lancetta sul valore letto.
+
+        L'arco si colora in due modi diversi, secondo cosa si sa della
+        grandezza:
+
+        - con `bande` — una lista di (da, a, colore) che copre il fondo scala —
+          le zone stanno FERME dove le mettono le soglie, e il numero prende il
+          colore della zona in cui cade la lancetta. Si usa dove le soglie
+          esistono davvero (pH, EC, riempimento minimo del serbatoio, MCARI2):
+          risponde a "sono nei parametri?" senza doverli ricordare.
+        - con `colore` — l'arco si riempie da sinistra fino al valore, in tinta
+          unita. Si usa dove NON esistono soglie ottimali (temperatura,
+          umidita', VPD): inventarne renderebbe il verde una bugia.
+
+        Si usano le primitive native di Tk e non matplotlib: su un Pi Zero W
+        quello costerebbe secondi di import e decine di MB di RAM per disegnare
+        mezza ciambella.
+
+        :param value: valore letto (None -> scala senza lancetta)
         :param vmin, vmax: fondo scala
-        :param testo: testo grande al centro
+        :param testo: valore da scrivere sotto l'arco
+        :param nota: testo facoltativo in cima (es. la fascia buona "5.5 - 6.5")
         """
         canvas.delete('all')
         w, h = canvas.winfo_width(), canvas.winfo_height()
@@ -1002,38 +1157,68 @@ class AeroGreenHouseGUI:
 
         spessore = 12
         margine = 18
-        lato = min(w - 2 * margine, (h - 14) * 2)
+        # (h - 44): il valore va scritto SOTTO la linea di base, perche' al
+        # centro del semicerchio ora passa la lancetta.
+        lato = min(w - 2 * margine, (h - 44) * 2)
         if lato <= spessore * 2:
             return
         x0 = (w - lato) / 2
         y0 = 8
         box = (x0 + spessore / 2, y0 + spessore / 2,
                x0 + lato - spessore / 2, y0 + lato - spessore / 2)
-
-        # Arco di sfondo (scala completa)
-        canvas.create_arc(*box, start=180, extent=-180, style=tk.ARC,
-                          outline=self.COL_DIV, width=spessore)
-
-        # Arco del valore
-        if value is not None and vmax > vmin:
-            frazione = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
-            if frazione > 0:
-                canvas.create_arc(*box, start=180, extent=-180 * frazione, style=tk.ARC,
-                                  outline=color, width=spessore)
-
-        # Valore al centro
         cx = x0 + lato / 2
         cy = y0 + lato / 2
-        canvas.create_text(cx, cy - 8, text=testo, font=(self.FONT_MONO, 22),
-                           fill=color if value is not None else self.COL_FAINT)
-        if unita:
-            canvas.create_text(cx, cy + 12, text=unita, font=(self.FONT_UI, 9), fill=self.COL_FAINT)
 
-        # Etichette di fondo scala
+        # 1) L'arco
+        if bande:
+            for da, a, colore_banda in bande:
+                a_da = self._gauge_angle(da, vmin, vmax)
+                a_a = self._gauge_angle(a, vmin, vmax)
+                if a_da > a_a:
+                    canvas.create_arc(*box, start=a_da, extent=a_a - a_da, style=tk.ARC,
+                                      outline=colore_banda, width=spessore)
+            colore_valore = (self._band_color(value, bande) if value is not None
+                             else self.COL_FAINT)
+        else:
+            canvas.create_arc(*box, start=180, extent=-180, style=tk.ARC,
+                              outline=self.COL_DIV, width=spessore)
+            if value is not None and vmax > vmin:
+                frazione = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
+                if frazione > 0:
+                    canvas.create_arc(*box, start=180, extent=-180 * frazione, style=tk.ARC,
+                                      outline=colore, width=spessore)
+            colore_valore = colore if value is not None else self.COL_FAINT
+
+        # 2) Lancetta. Il valore e' gia' clampato al fondo scala da
+        #    _gauge_angle: una lettura sballata deve fermarsi a fondo corsa,
+        #    non uscire dal disegno.
+        if value is not None:
+            a = math.radians(self._gauge_angle(value, vmin, vmax))
+            raggio = lato / 2 - spessore
+            # In Tk la y cresce verso il basso, mentre create_arc segue la
+            # convenzione matematica: da qui il meno sul seno.
+            canvas.create_line(cx, cy, cx + raggio * math.cos(a), cy - raggio * math.sin(a),
+                               fill=self.COL_TEXT, width=3, capstyle=tk.ROUND)
+            canvas.create_oval(cx - 4, cy - 4, cx + 4, cy + 4,
+                               fill=self.COL_TEXT, outline='')
+
+        # 3) Valore sotto la linea di base. Il colore ripete l'informazione
+        #    gia' data dalla posizione della lancetta: per chi distingue male
+        #    i colori resta comunque leggibile.
+        canvas.create_text(cx, cy + 16, text=testo, font=(self.FONT_MONO, 20),
+                           fill=colore_valore)
+        if unita:
+            canvas.create_text(cx, cy + 34, text=unita, font=(self.FONT_UI, 9),
+                               fill=self.COL_FAINT)
+
+        # 4) Estremi della scala, e la nota sulla fascia buona se c'e'
         canvas.create_text(x0 + spessore / 2, cy + 12, text=self._fmt_scala(vmin),
                            font=(self.FONT_UI, 8), fill=self.COL_FAINT)
         canvas.create_text(x0 + lato - spessore / 2, cy + 12, text=self._fmt_scala(vmax),
                            font=(self.FONT_UI, 8), fill=self.COL_FAINT)
+        if nota:
+            canvas.create_text(cx, y0 - 2, anchor=tk.N, text=nota,
+                               font=(self.FONT_UI, 8), fill=self.COL_OK)
 
     def _fmt_scala(self, v):
         """Formatta un fondo scala senza decimali inutili (100 invece di 100.0)."""
@@ -1058,6 +1243,7 @@ class AeroGreenHouseGUI:
         """
         self._refresh_riep_ambiente(force)
         self._refresh_riep_serbatoio(force)
+        self._refresh_riep_acqua(force)
         self._refresh_riep_mcari2(force)
         self._refresh_riep_crescita()
         self._refresh_riep_processi()
@@ -1075,69 +1261,131 @@ class AeroGreenHouseGUI:
         return True
 
     def _refresh_riep_ambiente(self, force):
-        """Blocco Ambiente: arco sull'umidita', numeri per temperatura e VPD."""
+        """
+        Blocco Ambiente: un indicatore per temperatura, umidita' e VPD.
+
+        Sono archi monocolore e non a fasce come pH ed EC: per queste tre
+        grandezze la configurazione non contiene un intervallo ottimale, e
+        dipingere di verde una fascia inventata farebbe credere a una soglia
+        che nessuno ha stabilito. Ogni grandezza tiene il colore con cui era
+        gia' scritta in questo riquadro.
+        """
         r = self.ah.ambient.last_result
         if not self._cambiato('ambiente', None if r is None else tuple(r.values()), force):
             return
 
-        if r is None:
-            self._draw_arc_gauge(self.riep_amb_gauge, None, 0, 100, 'gray', "--", "Umidità (%)")
-            return
+        for chiave, campo, vmin, vmax, colore, unita, decimali in (
+                ('temp', 'temperature', 0, self.SCALA_T_MAX, self.COL_BLUE, "°C", 1),
+                ('hum', 'humidity', 0, 100, self.COL_WARN, "%", 1),
+                ('vpd', 'vpd', 0, self.SCALA_VPD_MAX, self.COL_PRIMARY, "kPa", 3)):
+            valore = None if r is None else r[campo]
+            self._draw_gauge(
+                self.riep_amb_gauges[chiave], valore, vmin, vmax,
+                "--" if valore is None else f"{valore:.{decimali}f}", unita,
+                colore=colore)
 
-        self._draw_arc_gauge(self.riep_amb_gauge, r['humidity'], 0, 100,
-                             self.COL_WARN, f"{r['humidity']:.1f}", "Umidità (%)")
-        self.riep_amb_labels['Temperatura'].config(text=f"{r['temperature']:.1f} °C",
-                                                   foreground=self.COL_BLUE)
-        self.riep_amb_labels['VPD'].config(text=f"{r['vpd']:.4f} kPa", foreground=self.COL_PRIMARY)
-        self.riep_amb_date.config(text=f"Acquisito: {self._format_acq_date(r['timestamp'])}")
+        self.riep_amb_date.config(
+            text="Nessuna misura" if r is None
+            else f"Acquisito: {self._format_acq_date(r['timestamp'])}")
+
+    def _tank_fill_min(self):
+        """
+        Soglia di riempimento minimo, in percentuale.
+
+        In configurazione il minimo e' un VOLUME (tank.water_low_threshold_l,
+        lo stesso che fa scattare l'allarme "riempire la tanica"), mentre
+        l'indicatore e' in percentuale: qui si converte con la capienza
+        ricavata dagli altri due parametri della stessa sezione, invece di
+        introdurre una seconda soglia che potrebbe divergere dalla prima.
+
+        :return: percentuale (0-100); 0 se la capienza non e' configurata
+        """
+        t = self.config.get('tank', {}) or {}
+        capienza_L = t.get('tank_area_cm2', 0) * t.get('tank_height_cm', 0) / 1000.0
+        if capienza_L <= 0:
+            return 0.0
+        return min(100.0, 100.0 * t.get('water_low_threshold_l', 0) / capienza_L)
 
     def _refresh_riep_serbatoio(self, force):
-        """Blocco H2O: arco sul riempimento, piu' volume, pH ed EC."""
+        """Blocco Serbatoio: rosso sotto il riempimento minimo, verde sopra."""
         r = self.ah.tank.last_result
-        ph = self.ah.water.last_ph
-        ec = self.ah.water.last_ec
-
-        # La firma comprende anche pH ed EC: le tre grandezze si aggiornano
-        # con cadenze diverse, e il blocco va ridisegnato appena UNA cambia.
-        firma = (
-            None if r is None else tuple(r.values()),
-            None if ph is None else ph.get('ph'),
-            None if ec is None else ec.get('ec_us_cm'),
-        )
-        if not self._cambiato('serbatoio', firma, force):
+        if not self._cambiato('serbatoio', None if r is None else tuple(r.values()), force):
             return
 
-        self.riep_tank_labels['pH'].config(
-            text="--" if ph is None else f"{ph['ph']:.2f}")
-        self.riep_tank_labels['EC'].config(
-            text="--" if ec is None else f"{ec['ec_us_cm']:.0f} µS/cm")
+        fill_min = self._tank_fill_min()
+        bande = [(0, fill_min, self.COL_BAD), (fill_min, 100, self.COL_OK)]
+        fill = None if r is None else r['fill_percent']
+
+        self._draw_gauge(self.riep_tank_gauge, fill, 0, 100,
+                         "--" if fill is None else f"{fill:.1f}", "Riempimento (%)",
+                         bande=bande,
+                         nota=f"min {self._fmt_scala(round(fill_min, 1))} %")
 
         if r is None:
-            self._draw_arc_gauge(self.riep_tank_gauge, None, 0, 100, 'gray', "--", "Riempimento (%)")
             return
 
-        # Il colore segue il livello: sotto un quarto la tanica va riempita
-        fill = r['fill_percent']
-        colore = self.COL_BAD if fill < 25 else (self.COL_WARN if fill < 50 else self.COL_BLUE)
-        self._draw_arc_gauge(self.riep_tank_gauge, fill, 0, 100, colore,
-                             f"{fill:.1f}", "Riempimento (%)")
+        colore = self.COL_BAD if fill < fill_min else self.COL_OK
         self.riep_tank_labels['Volume'].config(text=f"{r['volume_L']:.2f} L", foreground=colore)
         self.riep_tank_date.config(text=f"Misurato: {self._format_acq_date(r['timestamp'])}")
 
+    def _refresh_riep_acqua(self, force):
+        """
+        Blocco H2O: i due indicatori a banda di pH ed EC.
+
+        Le due sonde sono job separati e possono avere l'una un dato e l'altra
+        no, quindi hanno chiavi di cache distinte: si ridisegna solo
+        l'indicatore che e' davvero cambiato.
+        """
+        p = self._water_params()
+
+        ph = self.ah.water.last_ph
+        if self._cambiato('acqua_ph', None if ph is None else tuple(ph.values()), force):
+            vmin, vmax = self._gauge_scale(p['ph_min'], p['ph_max'])
+            self._draw_gauge(
+                self.riep_ph_gauge,
+                None if ph is None else ph['ph'], vmin, vmax,
+                "--" if ph is None else f"{ph['ph']:.2f}", "pH",
+                bande=self._bande_soglia(vmin, vmax, p['ph_min'], p['ph_max']),
+                nota=f"{self._fmt_scala(p['ph_min'])} – {self._fmt_scala(p['ph_max'])}")
+            self.riep_ph_date.config(
+                text="Nessuna misura" if ph is None
+                else f"Misurato: {self._format_acq_date(ph['timestamp'])}")
+
+        ec = self.ah.water.last_ec
+        if self._cambiato('acqua_ec', None if ec is None else tuple(ec.values()), force):
+            vmin, vmax = self._gauge_scale(p['ec_min'], p['ec_max'])
+            self._draw_gauge(
+                self.riep_ec_gauge,
+                None if ec is None else ec['ec_us_cm'], vmin, vmax,
+                "--" if ec is None else f"{ec['ec_us_cm']:.0f}", "µS/cm",
+                bande=self._bande_soglia(vmin, vmax, p['ec_min'], p['ec_max']),
+                nota=f"{self._fmt_scala(p['ec_min'])} – {self._fmt_scala(p['ec_max'])}")
+            self.riep_ec_date.config(
+                text="Nessuna misura" if ec is None
+                else f"Misurato: {self._format_acq_date(ec['timestamp'])}")
+
     def _refresh_riep_mcari2(self, force):
-        """Blocco MCARI2: arco 0-1 colorato per fascia di salute della pianta."""
+        """
+        Blocco MCARI2: arco 0-1 diviso nelle quattro fasce di salute.
+
+        Le soglie non sono ricopiate qui: arrivano dal modulo dello
+        spettrometro, che e' anche quello che classifica le misure, cosi'
+        colori e classificazione non possono divergere.
+        """
         storico = self.ah.spectro.history
         r = storico[0] if storico else None   # lo storico spectro ha il piu' recente in testa
         if not self._cambiato('mcari2', None if r is None else (r['timestamp'], r['mcari2']), force):
             return
 
+        self._draw_gauge(self.riep_mcari_gauge,
+                         None if r is None else r['mcari2'], 0, 1,
+                         "--" if r is None else f"{r['mcari2']:.3f}", "MCARI2",
+                         bande=self._bande_mcari2())
+
         if r is None:
-            self._draw_arc_gauge(self.riep_mcari_gauge, None, 0, 1, 'gray', "--", "MCARI2")
             return
 
         colore = self.MCARI2_COLORS.get(r['stato'], self.COL_FAINT)
-        self._draw_arc_gauge(self.riep_mcari_gauge, r['mcari2'], 0, 1, colore,
-                             f"{r['mcari2']:.3f}", "MCARI2")
         self.riep_mcari_labels['Stato'].config(text=r['stato'], foreground=colore)
         self.riep_mcari_date.config(text=f"Valutato: {self._format_acq_date(r['timestamp'])}")
 
