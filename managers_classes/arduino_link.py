@@ -4,10 +4,12 @@ Ponte fra Raspberry e Arduino UNO (comunicazione seriale USB).
 E' l'UNICO modulo del progetto che apre una porta seriale: i manager non
 sanno nulla di pyserial, chiedono soltanto "leggimi il sensore X".
 
-Qui NON c'e' alcuna logica di temporizzazione. Il tempo resta al Raspberry:
+Qui NON c'e' alcuna logica di schedulazione. Il tempo resta al Raspberry:
 sono i manager (tank, water, plant_growth) a decidere quando e' scaduto
 l'intervallo di un job e a chiamare una lettura. Questo modulo si limita a
-comporre il comando, mandarlo sulla seriale e interpretare la risposta.
+comporre il comando, mandarlo sulla seriale e aspettare la risposta entro il
+timeout scelto dall'utente (arduino.timeout in config.yaml), scartando le
+righe che non sono la risposta al comando inviato.
 
 Protocollo, lato Arduino in fish_n_plant_reading_module_atlas.ino:
 
@@ -73,7 +75,11 @@ SENSOR_KEYS = ('pH', 'EC', 'US_water', 'US_plant')
 
 DEFAULT_BAUDRATE = 9600
 DEFAULT_TIMEOUT_S = 15   # una read_pH impegna l'Arduino per ~8s
-RESET_DELAY_S = 2        # aprire la USB resetta l'Arduino UNO: va aspettato
+RESET_DELAY_S = 4        # aprire la USB resetta l'Arduino UNO: attesa MINIMA
+                         # (bootloader ~2s + setup() con la configurazione
+                         # dell'EZO-EC ~1.2s); poi si aspetta comunque che il
+                         # banner di benvenuto finisca di arrivare
+BANNER_QUIET_S = 0.5     # seriale muta per questo tempo = setup() concluso
 
 
 def sensor_label(sensor_key):
@@ -198,9 +204,17 @@ class ArduinoBoard():
         Aprire la seriale USB fa RESETTARE l'Arduino UNO (comportamento
         normale della scheda, dovuto al DTR): serve qualche secondo prima
         che lo sketch sia ripartito, altrimenti il primo comando arriva
-        mentre l'Arduino si sta ancora riavviando e va perso. Subito dopo
-        si svuota il buffer, dove intanto e' finito il messaggio di
-        benvenuto stampato da setup().
+        mentre l'Arduino si sta ancora riavviando e va perso.
+
+        Durante setup() lo sketch stampa PIU' righe di benvenuto, l'ultima
+        delle quali ("EC: uscite EZO impostate...") arriva solo dopo la
+        configurazione dell'EZO-EC (~1.2s di delay). Uno sleep fisso seguito
+        da reset_input_buffer() non basta: se il buffer viene svuotato
+        troppo presto, la riga ritardataria viene poi letta come risposta
+        al primo comando e da li' tutte le risposte sono sfasate di uno.
+        Qui si aspetta invece che la scheda abbia FINITO di parlare: si
+        leggono e scartano le righe finche' la seriale tace per
+        BANNER_QUIET_S, e comunque per almeno reset_delay secondi.
         '''
         if self._serial is not None and self._serial.is_open:
             return self._serial
@@ -215,13 +229,47 @@ class ArduinoBoard():
                 f"{self.port}: controlla che il cavo USB sia collegato ({e})."
             )
 
-        time.sleep(self.reset_delay)
-        self._serial.reset_input_buffer()
+        try:
+            self._drain_banner(self._serial)
+        except (serial.SerialException, OSError) as e:
+            self._invalidate()
+            raise ArduinoError(
+                sensor_key,
+                f"Comunicazione interrotta con la scheda '{self.name}' "
+                f"({self.port}) durante l'avvio: {e}."
+            )
 
         if self.logger is not None:
             self.logger.info(f"ARDUINO: connesso a '{self.name}' su {self.port} "
                              f"a {self.baudrate} baud")
         return self._serial
+
+    def _drain_banner(self, conn):
+        '''
+        Legge e scarta le righe stampate da setup() dopo il reset.
+
+        Esce quando sono passati almeno reset_delay secondi E la seriale e'
+        rimasta muta per BANNER_QUIET_S; in ogni caso non oltre
+        reset_delay + timeout, per non restare bloccati con una scheda che
+        stampa in continuazione.
+        '''
+        inizio = time.monotonic()
+        limite = inizio + self.reset_delay + self.timeout
+        conn.timeout = BANNER_QUIET_S
+        try:
+            while time.monotonic() < limite:
+                riga = conn.readline().decode('utf-8', errors='replace').strip()
+                if riga:
+                    if self.logger is not None:
+                        self.logger.debug(f"ARDUINO: '{self.name}' all'avvio: {riga!r}")
+                    continue
+                # Nessuna riga per BANNER_QUIET_S: se e' anche passato il
+                # tempo minimo di reset, lo sketch e' pronto.
+                if time.monotonic() - inizio >= self.reset_delay:
+                    break
+        finally:
+            conn.timeout = self.timeout
+        conn.reset_input_buffer()
 
     def close(self):
         '''Chiude la porta seriale (idempotente).'''
@@ -243,15 +291,26 @@ class ArduinoBoard():
         :param command:    comando completo, es. 'read_us,2,3'
         :param sensor_key: solo per arricchire il messaggio d'errore
         :return: stringa del valore, es. '12.40' oppure '1250.0,625.0,0.62'
-        :raises ArduinoError: porta assente, timeout, ERR/ERRPIN, risposta
-                              malformata o riferita a un altro comando.
+        :raises ArduinoError: porta assente, timeout, ERR/ERRPIN, comando
+                              non riconosciuto o risposta malformata.
+
+        L'attesa della risposta e' limitata a `timeout` secondi complessivi
+        (valore scelto dall'utente in Configurazione). Entro quel tempo le
+        righe che NON sono la risposta al comando inviato (residui del
+        banner, messaggi di calibrazione, risposte arrivate in ritardo a un
+        comando precedente) vengono scartate e loggate, invece di essere
+        scambiate per la risposta: e' l'Arduino a rieccheggiare il comando
+        completo, e si accetta solo la riga che inizia con "<comando>:".
         '''
         with self._lock:
             conn = self._ensure_open(sensor_key)
 
             try:
+                # Butta via cio' che e' arrivato dopo la lettura precedente
+                # (es. una risposta giunta dopo il suo timeout).
+                conn.reset_input_buffer()
                 conn.write((command + '\n').encode('utf-8'))
-                risposta = conn.readline().decode('utf-8', errors='replace').strip()
+                risposta = self._wait_reply(conn, command)
             except (serial.SerialException, OSError) as e:
                 self._invalidate()
                 raise ArduinoError(
@@ -260,11 +319,18 @@ class ArduinoBoard():
                     f"({self.port}) durante '{command}': {e}."
                 )
 
-        if not risposta:
+        if risposta is None:
             raise ArduinoError(
                 sensor_key,
                 f"Nessuna risposta dalla scheda '{self.name}' ({self.port}) al "
                 f"comando '{command}' entro {self.timeout}s."
+            )
+
+        if risposta.lower() == f"err:{command}".lower():
+            raise ArduinoError(
+                sensor_key,
+                f"Comando '{command}' non riconosciuto dalla scheda '{self.name}': "
+                f"controlla che lo sketch caricato sia quello giusto."
             )
 
         # Lo sketch risponde "<comando completo>:<valore>": lo split e'
@@ -277,18 +343,7 @@ class ArduinoBoard():
                 f"'{command}': {risposta!r}."
             )
 
-        comando_ricevuto, valore = parti[0].strip(), parti[1].strip()
-
-        # L'Arduino rieccheggia il comando: se non combacia, stiamo leggendo
-        # la risposta di un'altra richiesta (buffer disallineato). Si scarta
-        # tutto e si riparte pulito al giro successivo.
-        if comando_ricevuto.lower() != command.lower():
-            self._invalidate()
-            raise ArduinoError(
-                sensor_key,
-                f"Risposta fuori sincrono dalla scheda '{self.name}': atteso "
-                f"'{command}', ricevuto '{comando_ricevuto}'."
-            )
+        valore = parti[1].strip()
 
         if valore == 'ERRPIN':
             raise ArduinoError(
@@ -305,6 +360,39 @@ class ArduinoBoard():
             )
 
         return valore
+
+    def _wait_reply(self, conn, command):
+        '''
+        Aspetta la riga di risposta a `command`, entro `timeout` secondi.
+
+        :return: la riga "<comando>:<valore>" (o "ERR:<comando>"), oppure
+                 None se il tempo e' scaduto senza una risposta pertinente.
+        '''
+        deadline = time.monotonic() + self.timeout
+        atteso = command.lower() + ':'
+        err_cmd = 'err:' + command.lower()
+        try:
+            while True:
+                residuo = deadline - time.monotonic()
+                if residuo <= 0:
+                    return None
+                # readline() rispetta la deadline complessiva, non un
+                # timeout fisso per riga: cosi' N righe spurie non allungano
+                # l'attesa oltre quanto scelto dall'utente.
+                conn.timeout = max(0.1, residuo)
+                riga = conn.readline().decode('utf-8', errors='replace').strip()
+                if not riga:
+                    continue   # timeout di pyserial: il while controlla la deadline
+
+                if riga.lower().startswith(atteso) or riga.lower() == err_cmd:
+                    return riga
+
+                if self.logger is not None:
+                    self.logger.warning(
+                        f"ARDUINO: '{self.name}' riga ignorata in attesa di "
+                        f"'{command}': {riga!r}")
+        finally:
+            conn.timeout = self.timeout
 
     def read_sensor(self, sensor_key):
         '''Compone ed esegue il comando del sensore indicato.'''

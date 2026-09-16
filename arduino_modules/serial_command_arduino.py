@@ -34,23 +34,46 @@ PORTA = '/dev/ttyUSB0'
 # arrivano corrotti o illeggibili.
 BAUDRATE = 9600
 
+# Tempo massimo di attesa della risposta a un comando, in secondi. Una
+# read_pH impegna l'Arduino per ~8s (5 campioni di tensione + 3 di pH), quindi
+# va tenuto abbondante. Scaduto questo tempo lo script stampa "Nessuna
+# risposta" invece di restare bloccato per sempre.
+TIMEOUT_S = 15
+
+# Attesa MINIMA dopo l'apertura della porta, prima di considerare l'Arduino
+# pronto (vedi sotto).
+RESET_DELAY_S = 4
+
 # Apre la connessione seriale.
-# timeout=2: se l'Arduino non risponde entro 2 secondi, readline() qui sotto
-# restituisce una stringa vuota invece di bloccare lo script per sempre.
-arduino = serial.Serial(PORTA, BAUDRATE, timeout=10)
+arduino = serial.Serial(PORTA, BAUDRATE, timeout=TIMEOUT_S)
 
 # Collegare/aprire la seriale USB fa RESETTARE automaticamente l'Arduino Uno
 # (comportamento normale della scheda, dovuto al DTR sulla USB-seriale):
 # serve qualche secondo prima che lo sketch sia ripartito e sia di nuovo
 # pronto ad ascoltare. Senza questa pausa, il primo comando rischia di
 # arrivare mentre l'Arduino si sta ancora riavviando e andrebbe perso.
-time.sleep(2)
-
-# Nel reset, l'Arduino manda subito un messaggio di benvenuto
-# (Serial.println("FnP fish_n_plant_reading_module pronto.") in setup()).
-# Lo svuotiamo dal buffer qui, cosi' non rischiamo di scambiarlo per la
-# risposta a un comando quando facciamo la prima readline() piu' sotto.
+#
+# Nel reset, setup() stampa PIU' righe di benvenuto, e l'ultima
+# ("EC: uscite EZO impostate...") arriva solo dopo la configurazione
+# dell'EZO-EC (~1.2s di delay, oltre ai ~2s del bootloader). Un semplice
+# sleep(2) + reset_input_buffer() NON basta: il buffer viene svuotato prima
+# che arrivi l'ultima riga, che poi viene letta come risposta al primo
+# comando, e da li' ogni risposta e' sfasata di un comando.
+# Qui invece si leggono (e stampano) le righe di benvenuto finche' la
+# seriale non tace per mezzo secondo, e comunque per almeno RESET_DELAY_S.
+print("Attendo l'avvio dell'Arduino...")
+inizio = time.time()
+arduino.timeout = 0.5
+while True:
+    riga = arduino.readline().decode('utf-8', errors='replace').strip()
+    if riga:
+        print(f"  [avvio] {riga}")
+        continue
+    if time.time() - inizio >= RESET_DELAY_S:
+        break
+arduino.timeout = TIMEOUT_S
 arduino.reset_input_buffer()
+print("Arduino pronto.")
 
 # print(f"Connesso ad Arduino su {PORTA} a {BAUDRATE} baud. Premi Ctrl+C per uscire.")
 # Comandi testuali riconosciuti dallo sketch Arduino (vedi tabella COMMANDS
@@ -81,19 +104,43 @@ try:
         # (come nella versione precedente di questo script) non basta:
         # l'Arduino resta in attesa per sempre e non risponde mai.
         print(cmds[cosa])
+        comando = cmds[cosa].strip()
+        # Butta via eventuali residui (es. una risposta arrivata dopo il
+        # timeout della lettura precedente), cosi' non vengono scambiati
+        # per la risposta a QUESTO comando.
+        arduino.reset_input_buffer()
         arduino.write((cmds[cosa]).encode('utf-8'))
 
-        # Legge una riga di risposta dall'Arduino, fino al newline che lo
-        # sketch manda con Serial.println(...).
+        # Aspetta la risposta per al massimo TIMEOUT_S secondi COMPLESSIVI.
+        # Lo sketch rieccheggia il comando ("<comando>:<valore>"), quindi si
+        # accetta solo la riga che inizia con il comando inviato; ogni altra
+        # riga (messaggi di stato, risposte in ritardo) viene mostrata e
+        # ignorata, senza allungare l'attesa.
         # .decode('utf-8') converte i byte grezzi ricevuti in una stringa di
         # testo leggibile; .strip() toglie newline/spazi bianchi finali.
-        risposta = arduino.readline().decode('utf-8').strip()
+        scadenza = time.time() + TIMEOUT_S
+        risposta = ''
+        while time.time() < scadenza:
+            arduino.timeout = max(0.1, scadenza - time.time())
+            riga = arduino.readline().decode('utf-8', errors='replace').strip()
+            if not riga:
+                continue
+            if riga.lower().startswith(comando.lower() + ':') \
+                    or riga.lower() == ('ERR:' + comando).lower():
+                risposta = riga
+                break
+            print(f"  [ignorata] {riga}")
+        arduino.timeout = TIMEOUT_S
 
         if not risposta:
-            # readline() ha esaurito il timeout senza ricevere nulla:
+            # Scaduto TIMEOUT_S senza una risposta pertinente:
             # possibile causa: Arduino non ancora pronto, cavo USB scollegato,
             # oppure lo sketch caricato non e' quello giusto.
-            print("Nessuna risposta dall'Arduino (timeout)")
+            print(f"Nessuna risposta dall'Arduino a '{comando}' entro {TIMEOUT_S}s (timeout)")
+            continue
+
+        if risposta.lower() == ('ERR:' + comando).lower():
+            print(f"Comando '{comando}' non riconosciuto dallo sketch Arduino.")
             continue
 
         # Lo sketch risponde nel formato "<comando>:<valore>", quindi

@@ -66,7 +66,7 @@ ir_control:
 arduino:
   baudrate: 9600
   timeout: 15
-  reset_delay: 2
+  reset_delay: 4
   boards:
   - name: Board1
     port: /dev/ttyACM0
