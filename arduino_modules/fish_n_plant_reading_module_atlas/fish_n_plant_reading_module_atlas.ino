@@ -159,7 +159,7 @@ void useECAddress(uint8_t address);
 // rileggere la EEPROM inutilmente ad ogni misura).
 const int PH_DEFAULT_PIN = A0;  // usato se il comando arriva senza argomenti
 
-Surveyor_pH pH_probe = Surveyor_pH(PH_DEFAULT_PIN);
+Surveyor_pH* pH_probe = new Surveyor_pH(PH_DEFAULT_PIN);
 int pH_current_pin = PH_DEFAULT_PIN;
 
 // Range di tensione atteso in uscita dal Surveyor (in mV, perche'
@@ -229,7 +229,7 @@ void setup() {
   // Carica dalla EEPROM l'ultima calibrazione pH salvata (se presente).
   // Se non c'e' mai stata una calibrazione, la libreria usa i suoi valori
   // di default e begin() ritorna false: non e' un errore bloccante.
-  if (pH_probe.begin()) {
+  if (pH_probe->begin()) {
     Serial.println("pH: calibrazione caricata da EEPROM.");
   } else {
     Serial.println("pH: nessuna calibrazione salvata, uso valori di default.");
@@ -411,16 +411,16 @@ void parse_calibration_cmd(const String &cmd) {
   upper.toUpperCase();
 
   if (upper == "CAL,7") {
-    pH_probe.cal_mid();
+    pH_probe->cal_mid();
     Serial.println("MID CALIBRATED");
   } else if (upper == "CAL,4") {
-    pH_probe.cal_low();
+    pH_probe->cal_low();
     Serial.println("LOW CALIBRATED");
   } else if (upper == "CAL,10") {
-    pH_probe.cal_high();
+    pH_probe->cal_high();
     Serial.println("HIGH CALIBRATED");
   } else if (upper == "CAL,CLEAR") {
-    pH_probe.cal_clear();
+    pH_probe->cal_clear();
     Serial.println("CALIBRATION CLEARED");
   } else {
     Serial.print("ERR:");
@@ -497,11 +497,11 @@ void handleReadPH(const String &comandoCompleto, const String &args) {
 
   // Conversione in pH tramite la libreria, usando i punti di calibrazione
   // salvati (o quelli di default se non e' mai stata fatta una CAL,x).
-  float ph1 = pH_probe.read_ph();
+  float ph1 = pH_probe->read_ph();
   delay(1000);
-  float ph2 = pH_probe.read_ph();
+  float ph2 = pH_probe->read_ph();
   delay(1000);
-  float ph3 = pH_probe.read_ph();
+  float ph3 = pH_probe->read_ph();
   float ph = (ph1 + ph2 + ph3) / 3.0;
 
   replyValue(comandoCompleto, String(ph, 2));  // 2 cifre decimali
@@ -513,8 +513,12 @@ void usePHPin(int pin) {
   if (pin == pH_current_pin) {
     return;
   }
-  pH_probe = Surveyor_pH(pin);
-  pH_probe.begin();
+  // Surveyor_pH non si puo' riassegnare: la libreria Atlas ha campi const
+  // interni che cancellano l'operator= generato dal compilatore. Si
+  // distrugge l'oggetto attuale e se ne crea uno nuovo sul pin richiesto.
+  delete pH_probe;
+  pH_probe = new Surveyor_pH(pin);
+  pH_probe->begin();
   pH_current_pin = pin;
 }
 
@@ -527,7 +531,7 @@ void usePHPin(int pin) {
 float readPHVoltageAveraged() {
   float sum_mV = 0;
   for (int i = 0; i < PH_N_SAMPLES; i++) {
-    sum_mV += pH_probe.read_voltage();
+    sum_mV += pH_probe->read_voltage();
     delay(PH_SAMPLE_INTERVAL_MS);
   }
   return sum_mV / PH_N_SAMPLES;
