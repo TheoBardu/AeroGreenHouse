@@ -47,7 +47,12 @@ import random
 from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-os.chdir(HERE)
+# Root del progetto (test_gui.py vive in tests/): gui.py e helper_aeroGreenHouse.py
+# aprono 'config.yaml' con un percorso relativo, quindi la cwd deve restare li'
+# e non su tests/, altrimenti quell'open() (e la copia di calibrazione qui sotto)
+# cercano un config.yaml che non esiste.
+PROJECT_ROOT = os.path.dirname(HERE)
+os.chdir(PROJECT_ROOT)
 sys.path.insert(0, HERE)
 
 # Cartella locale scrivibile per log e dati simulati
