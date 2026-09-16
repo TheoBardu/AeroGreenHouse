@@ -771,6 +771,12 @@ class AeroGreenHouseGUI:
         self.tank_nsamples_var = tk.StringVar(value=str(tank.get('n_samples', 5)))
         ttk.Entry(tank_cfg_frame, textvariable=self.tank_nsamples_var, width=10).grid(row=3, column=3, sticky=tk.W)
 
+        ttk.Label(tank_cfg_frame, text="Directory dati:").grid(row=4, column=0, sticky=tk.W)
+        self.tank_dir_var = tk.StringVar(
+            value=tank.get('saving_dir', '/home/fishnplants/Desktop/data/TANK/'))
+        ttk.Entry(tank_cfg_frame, textvariable=self.tank_dir_var, width=50).grid(
+            row=4, column=1, columnspan=3, sticky=tk.EW)
+
         # Frame per Spettrometro (Spectro)
         spectro_cfg_frame = self._card(parent, "Spettrometro (AS7265x) — indice MCARI2")
         spectro_cfg_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -2222,6 +2228,7 @@ class AeroGreenHouseGUI:
             self.config['tank']['water_low_threshold_l'] = float(self.tank_low_var.get())
             self.config['tank']['read_interval'] = int(self.tank_interval_var.get())
             self.config['tank']['n_samples'] = int(self.tank_nsamples_var.get())
+            self.config['tank']['saving_dir'] = self.tank_dir_var.get()
 
             # Sezione spettrometro (spectro)
             self.config.setdefault('spectro', {})
@@ -2304,6 +2311,7 @@ class AeroGreenHouseGUI:
         self.tank_low_var.set(str(tank.get('water_low_threshold_l', 3.0)))
         self.tank_interval_var.set(str(tank.get('read_interval', 300)))
         self.tank_nsamples_var.set(str(tank.get('n_samples', 5)))
+        self.tank_dir_var.set(tank.get('saving_dir', '/home/fishnplants/Desktop/data/TANK/'))
 
         sp = self.config.get('spectro', {})
         self.spectro_interval_var.set(str(sp.get('read_interval', 3600)))
