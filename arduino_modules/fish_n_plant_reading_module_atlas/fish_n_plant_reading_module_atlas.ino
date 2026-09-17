@@ -457,15 +457,39 @@ void parse_ec_calibration_cmd(const String &cmd) {
   char buffer[EC_BUFFER_LEN];
   EC_probe.send_cmd(daInviare.c_str());
   delay(1600);  // la calibrazione EZO e' l'operazione piu' lenta (fino a 1.5s)
-  EC_probe.receive_cmd(buffer, EC_BUFFER_LEN);
+  Ezo_board::errors esito = EC_probe.receive_cmd(buffer, EC_BUFFER_LEN);
 
-  if (EC_probe.get_error() != Ezo_board::SUCCESS) {
-    Serial.print("ERR:");
-    Serial.println(cmd);
-    return;
+  // Se l'EZO segnala "ancora in elaborazione" (254), il delay non e' bastato: un solo
+  // ritentativo con una breve attesa aggiuntiva evita falsi negativi senza nasconderli
+  // (se fallisce di nuovo, viene comunque riportato NOT_READY qui sotto).
+  if (esito == Ezo_board::NOT_READY) {
+    delay(300);
+    esito = EC_probe.receive_cmd(buffer, EC_BUFFER_LEN);
   }
 
-  Serial.println(buffer);
+  // La riga di risposta e' sempre "<comando>:<esito>", mai vuota: a differenza di "R",
+  // i comandi Cal,*/K,*/etc non restituiscono una stringa dati sull'I2C in caso di
+  // successo (solo il codice 1), quindi "buffer" resta vuoto. Il codice restituito da
+  // get_error()/receive_cmd() viene riportato per intero cosi' da sapere sempre se il
+  // comando e' stato eseguito, rifiutato dall'EZO, letto troppo presto o mai arrivato
+  // sul bus I2C (vedi Ezo_i2c.h: SUCCESS=1, FAIL=2, NOT_READY=254, NO_DATA=255).
+  Serial.print(cmd);
+  Serial.print(":");
+  switch (esito) {
+    case Ezo_board::SUCCESS:
+      Serial.println(buffer[0] == '\0' ? "OK" : buffer);
+      break;
+    case Ezo_board::FAIL:
+      Serial.println("ERR_SYNTAX");     // l'EZO ha ricevuto il comando ma l'ha rifiutato
+      break;
+    case Ezo_board::NOT_READY:
+      Serial.println("ERR_NOT_READY");  // l'EZO segnala che stava ancora elaborando
+      break;
+    case Ezo_board::NO_DATA:
+    default:
+      Serial.println("ERR_NODATA");     // nessuna risposta I2C dal chip (bus/indirizzo/cablaggio)
+      break;
+  }
 }
 
 // ================================================================

@@ -47,8 +47,14 @@ RESET_DELAY_S = 4
 # Valori (uS/cm) delle soluzioni di calibrazione EC usate con ECCAL,low e
 # ECCAL,high (vedi sotto): tipici Atlas Scientific, cambiali qui se usi
 # soluzioni diverse.
-EC_CAL_LOW_VALUE = 12880
-EC_CAL_HIGH_VALUE = 80000
+EC_CAL_LOW_VALUE = 84
+EC_CAL_HIGH_VALUE = 1413
+
+# Costante di cella (K) della sonda EC in uso: sonda K 0.1 di Atlas Scientific.
+# Default di fabbrica dell'EZO-EC e' K 1.0: va dichiarata una volta sola (resta salvata
+# nell'EEPROM del circuito EZO, non nell'Arduino). Cambiala qui se monti una sonda con
+# costante di cella diversa.
+EC_PROBE_K = 0.1
 
 # Apre la connessione seriale.
 arduino = serial.Serial(PORTA, BAUDRATE, timeout=TIMEOUT_S)
@@ -111,6 +117,7 @@ cmds = {
     11: f"ECCAL,high,{EC_CAL_HIGH_VALUE}\n",  # calibrazione EC punto alto
     12: "ECCAL,clear\n",                      # azzera calibrazione EC
     13: "ECCMD,<comando EZO>\n",              # comando EZO libero, chiesto a runtime
+    14: f"ECCMD,K,{EC_PROBE_K}\n",             # dichiara la costante di cella K della sonda EC
 }
 
 try:
@@ -141,12 +148,16 @@ try:
         arduino.reset_input_buffer()
         arduino.write(riga_da_inviare.encode('utf-8'))
 
-        # I comandi di calibrazione (CAL,.. / ECCAL,.. / ECCMD,..) non
-        # rieccheggiano "<comando>:<valore>" come i read_*: lo sketch
-        # risponde con una riga di conferma testuale libera (es. "MID
-        # CALIBRATED" o il messaggio grezzo dell'EZO), oppure "ERR:<cmd>"
-        # se non riconosciuto. Qui si stampa quindi la prima riga non
-        # vuota ricevuta, invece di cercare quel formato.
+        # I comandi di calibrazione pH (CAL,..) rispondono con una riga di
+        # conferma testuale libera (es. "MID CALIBRATED"), non echeggiata.
+        # I comandi EC (ECCAL,.. / ECCMD,..) rispondono invece sempre nel
+        # formato "<comando>:<esito>", dove <esito> e' OK (successo),
+        # ERR_SYNTAX (l'EZO ha rifiutato il comando), ERR_NOT_READY (l'EZO
+        # stava ancora elaborando) o ERR_NODATA (nessuna risposta I2C dal
+        # chip: cablaggio/indirizzo), oppure "ERR:<cmd>" se il comando non
+        # e' riconosciuto dallo sketch stesso (es. argomento mancante). Si
+        # stampa quindi la prima riga non vuota ricevuta, interpretandola
+        # secondo questi formati.
         if comando.upper().startswith(("CAL,", "ECCAL,", "ECCMD,")):
             scadenza = time.time() + TIMEOUT_S
             risposta = ''
@@ -158,10 +169,25 @@ try:
                     break
             arduino.timeout = TIMEOUT_S
 
+            prefisso_esito = comando.lower() + ':'
             if not risposta:
-                print(f"Nessuna risposta dall'Arduino a '{comando}' entro {TIMEOUT_S}s (timeout)")
+                print(f"Nessuna risposta dall'Arduino a '{comando}' entro {TIMEOUT_S}s (timeout): "
+                      f"il comando non e' arrivato allo sketch (USB scollegato? Arduino bloccato?).")
             elif risposta.lower() == ('ERR:' + comando).lower():
                 print(f"Comando '{comando}' non riconosciuto dallo sketch Arduino.")
+            elif risposta.lower().startswith(prefisso_esito):
+                esito = risposta[len(prefisso_esito):]
+                if esito.upper() == 'OK':
+                    print(f"'{comando}' eseguito con successo dall'EZO.")
+                elif esito.upper() == 'ERR_SYNTAX':
+                    print(f"'{comando}': l'EZO ha ricevuto il comando ma lo ha rifiutato (sintassi errata).")
+                elif esito.upper() == 'ERR_NOT_READY':
+                    print(f"'{comando}': l'EZO segnala di essere ancora occupato (letto troppo presto).")
+                elif esito.upper() == 'ERR_NODATA':
+                    print(f"'{comando}': nessuna risposta dal circuito EZO sul bus I2C "
+                          f"(controlla cablaggio/indirizzo).")
+                else:
+                    print(f"'{comando}': {esito}")
             else:
                 print(risposta)
             continue
