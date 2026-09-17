@@ -44,6 +44,12 @@ TIMEOUT_S = 15
 # pronto (vedi sotto).
 RESET_DELAY_S = 4
 
+# Valori (uS/cm) delle soluzioni di calibrazione EC usate con ECCAL,low e
+# ECCAL,high (vedi sotto): tipici Atlas Scientific, cambiali qui se usi
+# soluzioni diverse.
+EC_CAL_LOW_VALUE = 12880
+EC_CAL_HIGH_VALUE = 80000
+
 # Apre la connessione seriale.
 arduino = serial.Serial(PORTA, BAUDRATE, timeout=TIMEOUT_S)
 
@@ -83,12 +89,28 @@ print("Arduino pronto.")
 #   read_pH,<pin>          pin analogico del Surveyor
 #   read_EC,<indirizzo>    indirizzo I2C del circuito EZO-EC
 #   read_us,<trig>,<echo>  coppia di pin dell'HC-SR04
+#   CAL,7 / CAL,4 / CAL,10 / CAL,CLEAR    calibrazione pH (punto medio/basso/
+#                                         alto/azzeramento), con la sonda
+#                                         immersa nella soluzione tampone
+#   ECCAL,dry / low / high / clear       calibrazione EC, inoltrata cosi'
+#                                         com'e' al circuito EZO-EC
+#   ECCMD,<comando>        comando EZO libero (es. K,1.0 per la costante
+#                          di cella); il comando viene chiesto a runtime
 cmds = {
     0: "quit",
     1: "read_us,2,3\n",     # livello del serbatoio
     2: "read_us,4,5\n",     # altezza delle piante
     3: "read_pH,A0\n",
     4: "read_EC,100\n",
+    5: "CAL,7\n",                             # calibrazione pH punto medio
+    6: "CAL,4\n",                             # calibrazione pH punto basso
+    7: "CAL,10\n",                            # calibrazione pH punto alto
+    8: "CAL,CLEAR\n",                         # azzera calibrazione pH
+    9: "ECCAL,dry\n",                         # calibrazione EC punto a secco
+    10: f"ECCAL,low,{EC_CAL_LOW_VALUE}\n",    # calibrazione EC punto basso
+    11: f"ECCAL,high,{EC_CAL_HIGH_VALUE}\n",  # calibrazione EC punto alto
+    12: "ECCAL,clear\n",                      # azzera calibrazione EC
+    13: "ECCMD,<comando EZO>\n",              # comando EZO libero, chiesto a runtime
 }
 
 try:
@@ -98,18 +120,51 @@ try:
         if cosa == 0:
             break
 
+        # ECCMD e' l'unico comando che non viaggia gia' completo nel
+        # dizionario: il comando EZO vero e proprio dipende da cosa serve
+        # fare in quel momento, quindi si chiede qui, senza toccare cmds.
+        riga_da_inviare = cmds[cosa]
+        if cosa == 13:
+            comando_ezo = input("Comando EZO da inviare (es. K,1.0): ").strip()
+            riga_da_inviare = f"ECCMD,{comando_ezo}\n"
+
         # Manda il comando testuale, terminato da '\n': lo sketch Arduino
         # accumula i caratteri finche' non trova '\n' o '\r' e SOLO a quel
         # punto esegue processCommand(). Un byte singolo senza terminatore
         # (come nella versione precedente di questo script) non basta:
         # l'Arduino resta in attesa per sempre e non risponde mai.
-        print(cmds[cosa])
-        comando = cmds[cosa].strip()
+        print(riga_da_inviare)
+        comando = riga_da_inviare.strip()
         # Butta via eventuali residui (es. una risposta arrivata dopo il
         # timeout della lettura precedente), cosi' non vengono scambiati
         # per la risposta a QUESTO comando.
         arduino.reset_input_buffer()
-        arduino.write((cmds[cosa]).encode('utf-8'))
+        arduino.write(riga_da_inviare.encode('utf-8'))
+
+        # I comandi di calibrazione (CAL,.. / ECCAL,.. / ECCMD,..) non
+        # rieccheggiano "<comando>:<valore>" come i read_*: lo sketch
+        # risponde con una riga di conferma testuale libera (es. "MID
+        # CALIBRATED" o il messaggio grezzo dell'EZO), oppure "ERR:<cmd>"
+        # se non riconosciuto. Qui si stampa quindi la prima riga non
+        # vuota ricevuta, invece di cercare quel formato.
+        if comando.upper().startswith(("CAL,", "ECCAL,", "ECCMD,")):
+            scadenza = time.time() + TIMEOUT_S
+            risposta = ''
+            while time.time() < scadenza:
+                arduino.timeout = max(0.1, scadenza - time.time())
+                riga = arduino.readline().decode('utf-8', errors='replace').strip()
+                if riga:
+                    risposta = riga
+                    break
+            arduino.timeout = TIMEOUT_S
+
+            if not risposta:
+                print(f"Nessuna risposta dall'Arduino a '{comando}' entro {TIMEOUT_S}s (timeout)")
+            elif risposta.lower() == ('ERR:' + comando).lower():
+                print(f"Comando '{comando}' non riconosciuto dallo sketch Arduino.")
+            else:
+                print(risposta)
+            continue
 
         # Aspetta la risposta per al massimo TIMEOUT_S secondi COMPLESSIVI.
         # Lo sketch rieccheggia il comando ("<comando>:<valore>"), quindi si
